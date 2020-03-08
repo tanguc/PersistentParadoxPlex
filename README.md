@@ -41,5 +41,5 @@ Our main goal is to bring actual tools & technologies, to tie them and give a
  
  ## Architecture overview
  
- ![Architecture overview](./PersistentMarkingLB_architecture_overview.svg)
+ ![Architecture overview](./PersistentMarkingLB_architecture_overview.png)
  
