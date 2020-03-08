@@ -3,89 +3,105 @@ extern crate tokio;
 extern crate tokio_util;
 #[macro_use]
 extern crate log;
+extern crate uuid;
+
+pub mod persistent_marking_lb;
+use persistent_marking_lb::PersistentMarkingLB;
 
 use futures::executor;
 use futures::prelude::*;
-use futures::stream::SplitStream;
+use futures::stream::{SplitSink, SplitStream};
 use futures::task::Context;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 use tokio::task;
 use tokio_util::codec::{Framed, LinesCodec};
+use uuid::Uuid;
 
-async fn process_socket(tcp_stream: TcpStream, nickname: String, shared: Arc<Mutex<Shared>>) {
+async fn process_socket(peer: Peer) {
     debug!("Processing socket");
 
-    match tcpStream.local_addr() {
-        Ok(socket_addr) => {
-            let stream_framed = Framed::new(tcpStream, LinesCodec::new());
-            let peer = Peer {
-                tcpSocket: stream_framed,
-            };
-            shared.lock().unwrap().peers.insert(socket_addr, peer);
-
-            loop {
-                debug!("Processing loop");
-            }
-        }
-        Err(err) => {}
+    loop {
+        debug!("Processing loop");
     }
 }
 
+type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
+
+struct UpstreamServerPool {}
+struct RedisCache {}
+
+#[derive(Clone, Debug)]
 struct Peer {
-    tx: Receiver,
-    rx: SplitStream,
-    tcpSocket: Framed,
-    nickname: String,
+    uuid: Uuid,
+    inner_exchange_rx: watch::Receiver<InnerExchange>,
+    tcp_stream: TcpStream,
 }
 
-/*
-impl Stream for Peer {
-    type Item = Peer;
-
-    fn poll_next(&mut self, cx: &mut Context) -> Result<Async<Option<Self::Item>>, Self::Error> {}
+enum PeerError {
+    SocketAddrNotFound,
 }
-*/
 
-struct Shared<'a> {
+impl Peer {
+    fn new(tcp_stream: TcpStream, channel_rx: watch::Receiver<InnerExchange>) -> Self {
+        Peer {
+            uuid: Uuid::new_v4(),
+            inner_exchange_rx: channel_rx,
+            tcp_stream,
+        }
+    }
+
+    fn get_socket_addr(&self) -> Result<SocketAddr, PeerError> {
+        match self.tcp_stream.local_addr() {
+            Ok(socket_addr) => Ok(socket_addr),
+            Err(err) => {
+                error!("Not able to retrieve client socket address");
+                Err(PeerError::SocketAddrNotFound)
+            }
+        }
+    }
+}
+
+struct Shared {
     peers: HashMap<SocketAddr, Peer>,
+    peers_by_uuid: HashMap<Uuid, Peer>,
+}
+
+#[derive(Clone, Debug)]
+enum InnerExchange {
+    START,
+    PAUSE,
+}
+
+async fn handle_new_client(runtime: PersistentMarkingLBRuntime, client: TcpStream) {
+    info!("New client connected");
+    let peer = Peer::new(client, runtime.lock().unwrap().inner_rx.clone());
+    shared.peers.insert(peer.get_socket_addr()?, peer.clone());
+    shared
+        .peers_by_nickname
+        .insert(peer.uuid.clone(), peer.clone());
+    task::spawn(process_socket(peer));
 }
 
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
     debug!("Starting listener!");
-    let i = 0;
 
-    let mut shared: Arc<Mutex<Shared>> = Arc::new(Mutex::new(Shared {
-        peers: HashMap::new(),
-    }));
+    let mut runtime: PersistentMarkingLBRuntime =
+        Arc::new(Mutex::new(persistent_marking_lb::PersistentMarkingLB::new()));
     let mut listener_res = TcpListener::bind("127.0.0.1:7999");
-    let login_server = async move {
+    let lb_server = async move {
         match listener_res.await {
             Ok(mut listener_res) => loop {
                 let mut incoming_streams = listener_res.incoming();
 
-                let (login_channel_tx, login_channel_rx) =
-                    tokio::sync::watch::channel("login_handler");
-
                 while let Some(client_stream) = incoming_streams.next().await {
-                    match client_stream {
-                        Ok(client_stream) => {
-                            println!("New client connected");
-                            let shared = shared.clone();
-                            task::spawn(async {
-                                process_socket(client_stream, format!("Nickname-{}", i++), shared)
-                                    .await
-                            });
-                        }
-                        Err(_) => {
-                            error!("Got error during fetch of the client streaming");
-                        }
-                    }
+                    handle_new_client(runtime.clone(), client_stream?);
                 }
             },
             Err(_) => {
@@ -98,7 +114,7 @@ async fn main() {
 
     //let login_server = future::select(Box::pin(login_server), future::ready(Ok::<_, ()>(())));
 
-    login_server.await;
+    lb_server.await;
 }
 
 #[cfg(test)]

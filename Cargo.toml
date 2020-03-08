@@ -1,5 +1,5 @@
 [package]
-name = "PersistentMarkingLB"
+name = "persistent_marking_lb"
 version = "0.1.0"
 authors = ["tanguc <sergen.tanguc@gmail.com>"]
 edition = "2018"
@@ -12,3 +12,4 @@ pretty_env_logger = "0.4.0"
 log = "0.4.8"
 futures = "0.3.4"
 tokio-util = { version = "0.3.0", features = ["codec"] }
+uuid = {version = "0.8.1", features = ["v4"]}
