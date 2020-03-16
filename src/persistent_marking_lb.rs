@@ -15,22 +15,28 @@ pub enum InnerExchange {
 
 #[derive(Debug)]
 pub struct PersistentMarkingLB {
-    pub peers_channels: HashMap<Uuid, mpsc::Sender<InnerExchange>>,
-    pub peers_addr: HashMap<SocketAddr, Uuid>,
+    pub front_end_sink_channel: HashMap<Uuid, mpsc::Sender<InnerExchange>>,
+    pub front_end_addr: HashMap<SocketAddr, Uuid>,
+
+    pub back_end_sink_channel: HashMap<Uuid, mpsc::Sender<InnerExchange>>,
+    pub back_end_addr: HashMap<SocketAddr, Uuid>,
+
     pub self_rx: watch::Receiver<InnerExchange>,
     pub self_tx: watch::Sender<InnerExchange>,
 }
 
 pub enum PersistentMarkingLBError {
-    CANNOT_HANDLE_CLIENT,
+    CannotHandleClient,
 }
 
 impl PersistentMarkingLB {
     pub fn new() -> Self {
         let (self_tx, self_rx) = watch::channel(InnerExchange::START);
         PersistentMarkingLB {
-            peers_channels: HashMap::new(),
-            peers_addr: HashMap::new(),
+            front_end_sink_channel: HashMap::new(),
+            front_end_addr: HashMap::new(),
+            back_end_sink_channel: HashMap::new(),
+            back_end_addr: HashMap::new(),
             self_rx,
             self_tx,
         }
@@ -41,9 +47,9 @@ impl PersistentMarkingLB {
         peer: &Peer,
         peer_addr: SocketAddr,
     ) -> Result<(), PersistentMarkingLBError> {
-        self.peers_channels.insert(peer.uuid, peer.self_tx.clone());
-        self.peers_addr.insert(peer_addr, peer.uuid.clone());
-
+        self.front_end_sink_channel
+            .insert(peer.uuid.clone(), peer.sink_channel_tx.clone());
+        self.front_end_addr.insert(peer_addr, peer.uuid.clone());
         Ok(())
     }
 }
