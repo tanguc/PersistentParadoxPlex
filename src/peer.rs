@@ -1,4 +1,4 @@
-use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder};
+use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder, RuntimeOrderTxChannel};
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
@@ -14,21 +14,23 @@ use uuid::Uuid;
 pub trait FrontEndPeer {}
 pub trait BackEndPeer {}
 
+pub type PeerTxChannel = mpsc::Sender<InnerExchange<String>>;
+pub type PeerRxChannel = mpsc::Receiver<InnerExchange<String>>;
+
 #[derive(Debug)]
 pub struct Peer {
     pub uuid: Uuid,
-    pub runtime_rx: watch::Receiver<RuntimeOrder>,
-    // pub frame: Framed<TcpStream, LinesCodec>,
-    // pub sink: futures::stream::SplitSink<
-    //     futures::stream::SplitSink<String, Error = ()> + Unpin + Send,
-    //     String,
-    // >,
-    // pub stream: futures::stream::SplitStream<String>,
-    pub stream_channel_rx: mpsc::Receiver<InnerExchange<String>>,
-    pub stream_channel_tx: mpsc::Sender<InnerExchange<String>>,
+    // Useful when the Peer need to contact the runtime (peer terminated
+    // connection)
+    // Note: when the runtime need to communicate with the peer, it will
+    // go through the associated halve rx channel
+    pub runtime_tx: RuntimeOrderTxChannel,
 
-    pub sink_channel_rx: mpsc::Receiver<InnerExchange<String>>,
-    pub sink_channel_tx: mpsc::Sender<InnerExchange<String>>,
+    pub stream_channel_tx: PeerTxChannel,
+    pub stream_channel_rx: PeerRxChannel,
+
+    pub sink_channel_tx: PeerTxChannel,
+    pub sink_channel_rx: PeerRxChannel,
 }
 
 // pub struct PeerHalve {
@@ -44,9 +46,9 @@ pub struct PeerMetadata {
 
 pub struct PeerHalve {
     pub metadata: PeerMetadata,
-    runtime_rx: watch::Receiver<RuntimeOrder>,
-    rx: mpsc::Receiver<InnerExchange<String>>,
-    pub tx: mpsc::Sender<InnerExchange<String>>,
+    runtime_tx: RuntimeOrderTxChannel,
+    pub rx: PeerRxChannel,
+    pub tx: PeerTxChannel,
 }
 
 pub struct StreamPeerHalve {
@@ -68,15 +70,15 @@ pub enum PeerError {
 pub fn peer_halves(
     tcp_stream: TcpStream,
     socket_addr: SocketAddr,
-    runtime_rx: watch::Receiver<RuntimeOrder>,
+    runtime_tx: RuntimeOrderTxChannel,
 ) -> (SinkPeerHalve, StreamPeerHalve) {
     let frame = Framed::new(tcp_stream, LinesCodec::new());
     let (tcp_sink, tcp_stream) = frame.split::<String>();
 
     let peer_sink: SinkPeerHalve =
-        SinkPeerHalve::new(tcp_sink, runtime_rx.clone(), socket_addr.clone());
+        SinkPeerHalve::new(tcp_sink, runtime_tx.clone(), socket_addr.clone());
     let peer_stream: StreamPeerHalve =
-        StreamPeerHalve::new(tcp_stream, runtime_rx.clone(), socket_addr.clone());
+        StreamPeerHalve::new(tcp_stream, runtime_tx.clone(), socket_addr.clone());
 
     (peer_sink, peer_stream)
 }
@@ -93,21 +95,14 @@ impl PeerHalveRuntime for StreamPeerHalve {
                 self.halve.metadata.uuid
             );
             loop {
-                ///
-                /// impossible
-                // let should_not = self.halve.rx.recv().await;
-                // debug!("PeerHalveStream result from rx : {:?}", should_not);
-                ///
-                ///
                 let line = futures::stream::StreamExt::next(&mut self.tcp_stream).await;
-                // let line = tokio::stream::StreamExt::next(&mut tcp_stream).await;
-
                 match line {
                     Some(line) => {
                         debug!("Got a new line : {:?}", line);
                     }
                     None => {
-                        debug!("Peer terminated connection");
+                        debug!("Peer terminated connection, notifying runtime");
+                        // self.halve.runtime_rx.
                         break;
                     }
                 }
@@ -152,11 +147,11 @@ impl PeerHalveRuntime for SinkPeerHalve {
 impl SinkPeerHalve {
     pub fn new(
         tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
-        runtime_rx: watch::Receiver<RuntimeOrder>,
+        runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
     ) -> Self {
         SinkPeerHalve {
-            halve: PeerHalve::new(runtime_rx, socket_addr),
+            halve: PeerHalve::new(runtime_tx, socket_addr),
             tcp_sink,
         }
     }
@@ -165,25 +160,25 @@ impl SinkPeerHalve {
 impl StreamPeerHalve {
     pub fn new(
         tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>,
-        runtime_rx: watch::Receiver<RuntimeOrder>,
+        runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
     ) -> Self {
         StreamPeerHalve {
-            halve: PeerHalve::new(runtime_rx, socket_addr),
+            halve: PeerHalve::new(runtime_tx, socket_addr),
             tcp_stream,
         }
     }
 }
 
 impl PeerHalve {
-    pub fn new(runtime_rx: watch::Receiver<RuntimeOrder>, socket_addr: SocketAddr) -> Self {
+    pub fn new(runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
         let (tx, rx) = mpsc::channel::<InnerExchange<String>>(1000);
         PeerHalve {
             metadata: PeerMetadata {
                 uuid: Uuid::new_v4(),
                 socket_addr,
             },
-            runtime_rx,
+            runtime_tx,
             rx,
             tx,
         }
@@ -191,13 +186,13 @@ impl PeerHalve {
 }
 
 impl Peer {
-    pub fn new(runtime_rx: watch::Receiver<RuntimeOrder>) -> Self {
+    pub fn new(runtime_tx: RuntimeOrderTxChannel) -> Self {
         let (stream_channel_tx, stream_channel_rx) = mpsc::channel::<InnerExchange<String>>(1000);
         let (sink_channel_tx, sink_channel_rx) = mpsc::channel::<InnerExchange<String>>(1000);
 
         Peer {
             uuid: Uuid::new_v4(),
-            runtime_rx,
+            runtime_tx,
             stream_channel_rx,
             stream_channel_tx,
             sink_channel_rx,

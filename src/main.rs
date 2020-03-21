@@ -43,17 +43,15 @@ async fn handle_new_client(runtime: PersistentMarkingLBRuntime, tcp_stream: TcpS
             debug!("Got client addr");
             // let mut peer = Peer::new(runtime.lock().unwrap().self_rx.clone());
 
-            let (peer_sink, peer_stream) = peer_halves(
-                tcp_stream,
-                peer_addr,
-                runtime.lock().unwrap().self_rx.clone(),
-            );
+            let (peer_sink, peer_stream) =
+                peer_halves(tcp_stream, peer_addr, runtime.lock().unwrap().tx.clone());
 
             runtime
                 .lock()
                 .unwrap()
                 .add_peer_halves(&peer_sink, &peer_stream);
 
+            //debug purposes
             tokio::spawn(dummy_task_for_writing(peer_sink.halve.tx.clone()));
 
             peer_sink.start();
@@ -70,8 +68,7 @@ async fn main() {
     pretty_env_logger::init();
     debug!("Starting listener!");
 
-    let runtime: PersistentMarkingLBRuntime =
-        Arc::new(Mutex::new(persistent_marking_lb::PersistentMarkingLB::new()));
+    let runtime = PersistentMarkingLB::new();
 
     let addr = "127.0.0.1:7999";
 

@@ -1,8 +1,9 @@
-use crate::peer::{SinkPeerHalve, StreamPeerHalve};
+use crate::peer::{PeerRxChannel, PeerTxChannel, SinkPeerHalve, StreamPeerHalve};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use std::borrow::BorrowMut;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -20,29 +21,25 @@ pub enum RuntimeOrder {
     NoOrder,
     ShutdownPeer,
     PausePeer,
+    PeerTerminatedConnection,
 }
 
 pub type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
-
-type PeerSenderChannel = mpsc::Sender<InnerExchange<String>>;
+pub type RuntimeOrderTxChannel = mpsc::Sender<RuntimeOrder>;
 
 #[derive(Debug)]
 pub struct PersistentMarkingLB {
-    // pub back_end_sink_channel: HashMap<Uuid, mpsc::Sender<InnerExchange<String>>>,
-    // pub back_end_addr: HashMap<SocketAddr, Uuid>,
-    pub self_rx: watch::Receiver<RuntimeOrder>,
-    pub self_tx: watch::Sender<RuntimeOrder>,
+    pub tx: RuntimeOrderTxChannel,
 
     // Used only for runtime orders
-    pub front_peers_stream_channels: HashMap<Uuid, PeerSenderChannel>,
-    pub back_peers_stream_channels: HashMap<Uuid, PeerSenderChannel>,
+    pub front_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
+    pub back_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
 
     // Used to send data to write
-    pub front_peers_sink_channels: HashMap<Uuid, PeerSenderChannel>,
-    pub back_peers_sink_channels: HashMap<Uuid, PeerSenderChannel>,
+    pub front_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
+    pub back_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
 
     pub peers_socket_addr_uuids: HashMap<SocketAddr, Uuid>,
-    // dummy_peers: Vec<Peer>,
 }
 
 pub enum PersistentMarkingLBError {
@@ -50,17 +47,38 @@ pub enum PersistentMarkingLBError {
 }
 
 impl PersistentMarkingLB {
-    pub fn new() -> Self {
-        let (self_tx, self_rx) = watch::channel(RuntimeOrder::NoOrder);
-        PersistentMarkingLB {
-            front_peers_stream_channels: HashMap::new(),
-            front_peers_sink_channels: HashMap::new(),
-            back_peers_stream_channels: HashMap::new(),
-            back_peers_sink_channels: HashMap::new(),
-            self_rx,
-            self_tx,
+    pub fn new() -> Arc<Mutex<Self>> {
+        let (tx, rx) = mpsc::channel::<RuntimeOrder>(1000);
+        let runtime = Arc::new(Mutex::new(PersistentMarkingLB {
+            front_peers_stream_tx: HashMap::new(),
+            front_peers_sink_tx: HashMap::new(),
+            back_peers_stream_tx: HashMap::new(),
+            back_peers_sink_tx: HashMap::new(),
+            tx,
             peers_socket_addr_uuids: HashMap::new(),
-        }
+        }));
+        Self::start(runtime.clone(), rx);
+
+        runtime
+    }
+
+    fn start(runtime: Arc<Mutex<PersistentMarkingLB>>, mut rx: mpsc::Receiver<RuntimeOrder>) {
+        let runtime_task = async move {
+            debug!("Starting runtime of PersistentMarkingLB");
+            match rx.recv().await {
+                Some(runtime_order) => {
+                    info!("Got order from a client");
+                }
+                None => {
+                    debug!(
+                        "Looks like all senders halves of runtime have \
+                    been dropped"
+                    );
+                }
+            }
+        };
+
+        tokio::task::spawn(runtime_task);
     }
 
     pub fn add_peer_halves(
@@ -68,11 +86,11 @@ impl PersistentMarkingLB {
         peer_sink_halve: &SinkPeerHalve,
         peer_stream_halve: &StreamPeerHalve,
     ) -> Result<(), PersistentMarkingLBError> {
-        self.front_peers_stream_channels.insert(
+        self.front_peers_stream_tx.insert(
             peer_stream_halve.halve.metadata.uuid,
             peer_stream_halve.halve.tx.clone(),
         );
-        self.front_peers_sink_channels.insert(
+        self.front_peers_sink_tx.insert(
             peer_sink_halve.halve.metadata.uuid,
             peer_sink_halve.halve.tx.clone(),
         );
@@ -82,19 +100,4 @@ impl PersistentMarkingLB {
         );
         Ok(())
     }
-
-    // pub fn add_peer(
-    //     &mut self,
-    //     peer: &Peer,
-    //     peer_addr: SocketAddr,
-    // ) -> Result<(), PersistentMarkingLBError> {
-    //     self.front_end_sink_channel
-    //         .insert(peer.uuid.clone(), peer.sink_channel_tx.clone());
-    //     self.front_end_addr.insert(peer_addr, peer.uuid.clone());
-    //     Ok(())
-    // }
-    //
-    // pub fn add_peer_test(&mut self, peer: Peer) {
-    //     self.dummy_peers.push(peer);
-    // }
 }
