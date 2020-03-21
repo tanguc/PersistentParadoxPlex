@@ -9,83 +9,97 @@ pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
 
+use crate::peer::{peer_halves, PeerHalveRuntime, SinkPeerHalve, StreamPeerHalve};
 use futures::prelude::*;
 use peer::Peer;
-use persistent_marking_lb::{InnerExchange, PersistentMarkingLB};
+use persistent_marking_lb::{InnerExchange, PersistentMarkingLB, RuntimeOrder};
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::stream::StreamExt;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::watch::Receiver;
 use tokio::task;
+use tokio::time::{delay_for, Duration};
+use tokio_util::codec::{Framed, LinesCodec};
 
 type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
 
-async fn process_socket_io(peer: Peer) {
-    debug!("Processing socket");
+// async fn process_socket_io(mut peer: Peer, frame: Framed<TcpStream, LinesCodec>) {
+//     debug!("Processing socket");
 
-    let (mut tcp_sink, mut tcp_stream) = peer.frame.split::<String>();
+// let mut runtime_channel_rx = peer.runtime_rx.clone();
+// let runtime_orders = move || async move {
+//     let mut started = false;
+//     loop {
+//         match peer.runtime_rx.recv().await {
+//             Some(runtime_order) => match runtime_order {
+//                 RuntimeOrder::NO_ORDER => {
+//                     started = true;
+//                     info!("NO order from runtime");
+//                 }
+//                 RuntimeOrder::PAUSE_PEER => {
+//                     info!("Got order to pause peer");
+//                 }
+//                 RuntimeOrder::SHUTDOWN_PEER => {
+//                     info!("Got order to shutdown peer");
+//                 }
+//             },
+//             None => {
+//                 error!("The sender half (runtime) has dropped, it should not.");
+//                 break;
+//             }
+//         };
+//     }
+// };
 
-    let peer_uuid = peer.uuid.clone();
-    let read_task = move || async move {
-        info!("Spawning read task for the client {}", peer_uuid);
-        loop {
-            let line = tcp_stream.next().await;
+// task::spawn(runtime_orders());
 
-            match line {
-                Some(line) => {
-                    debug!("Got a new line : {:?}", line);
-                }
-                None => {
-                    debug!("Peer terminated connection");
-                    break;
-                }
-            }
-        }
-    };
+// let mut for_dummy_write_task_sink_channel_tx = peer.sink_channel_tx.clone();
+// task::spawn(dummy_task_for_writing(for_dummy_write_task_sink_channel_tx));
+// }
 
-    let peer_uuid = peer.uuid.clone();
-    let mut write_task_runtime_rx = peer.runtime_rx.clone();
-    let write_task = move || async move {
-        info!("Spawning writing task for the client {}", peer_uuid);
+// async fn dummy_task_for_writing(mut peer_writing_task_channel_tx: Sender<InnerExchange<String>>) {
+//     info!("Starting the dummy data exchanger (to the sink peer)");
+//
+//     let mut i = 0;
+//     loop {
+//         delay_for(Duration::from_secs(2)).await;
+//         let dummy_message = format!("DUMMY ANSWER {}", i);
+//         peer_writing_task_channel_tx.send(InnerExchange::WRITE(dummy_message));
+//         debug!("Sent message from dummy");
+//         i = i + 1;
+//     }
+// }
 
-        loop {
-            match write_task_runtime_rx.recv().await {
-                Some(runtime_order) => match runtime_order {
-                    InnerExchange::START => {
-                        info!("Starting the writing");
-                    }
-                    InnerExchange::PAUSE => {
-                        info!("Pause the writing");
-                    }
-                },
-                None => {
-                    error!("The sender half (runtime) has dropped, it should not.");
-                    break;
-                }
-            }
-        }
-
-        // let test_send_all_data = vec!["Salut", "Je", "m'appel", "toto", "et", "c'est", "finis"];
-        // let owned_str = test_send_all_data.into_iter().map(|str| String::from(str));
-        // let mut stream_data = futures::stream::iter(test_send_all_data);
-
-        // let mut toto = futures::stream::once(async { stream_data });
-        // tcp_sink.send("Toto".to_string());
-        // tcp_sink.send_all(&mut toto).await;
-    };
-
-    task::spawn(write_task());
-    task::spawn(read_task());
-}
-
-async fn handle_new_client(runtime: PersistentMarkingLBRuntime, client: TcpStream) {
+async fn handle_new_client(runtime: PersistentMarkingLBRuntime, tcp_stream: TcpStream) {
     info!("New client connected");
 
-    match client.peer_addr() {
+    match tcp_stream.peer_addr() {
         Ok(peer_addr) => {
             debug!("Got client addr");
-            let peer = Peer::new(client, runtime.lock().unwrap().self_rx.clone());
+            // let mut peer = Peer::new(runtime.lock().unwrap().self_rx.clone());
 
-            runtime.lock().unwrap().add_peer(&peer, peer_addr.clone());
-            process_socket_io(peer).await;
+            let (peer_sink, peer_stream) = peer_halves(
+                tcp_stream,
+                peer_addr,
+                runtime.lock().unwrap().self_rx.clone(),
+            );
+
+            runtime
+                .lock()
+                .unwrap()
+                .add_peer_halves(&peer_sink, &peer_stream);
+
+            peer_sink.start();
+            peer_stream.start();
+            // peer_stream
+            //     .runtime
+            //     .lock()
+            //     .unwrap()
+            //     .add_peer(&peer, peer_addr.clone());
+
+            // process_socket_io(peer, frame).await;
+            // runtime.lock().unwrap().add_peer_test(peer);
         }
         Err(err) => {
             error!("Not able to retrieve client socket address");
@@ -109,7 +123,9 @@ async fn main() {
             Ok(mut listener_res) => loop {
                 info!("Listening on {}", addr);
                 let mut incoming_streams = listener_res.incoming();
-                while let Some(client_stream) = incoming_streams.next().await {
+                while let Some(client_stream) =
+                    tokio::stream::StreamExt::next(&mut incoming_streams).await
+                {
                     match client_stream {
                         Ok(client_stream) => {
                             handle_new_client(runtime.clone(), client_stream).await;
