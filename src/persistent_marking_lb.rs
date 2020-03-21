@@ -3,7 +3,7 @@ use crate::peer::{SinkPeerHalve, StreamPeerHalve};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -17,13 +17,14 @@ pub enum InnerExchange<T> {
 
 #[derive(Clone, Debug)]
 pub enum RuntimeOrder {
-    NO_ORDER,
-    SHUTDOWN_PEER,
-    PAUSE_PEER,
+    NoOrder,
+    ShutdownPeer,
+    PausePeer,
 }
 
+pub type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
+
 type PeerSenderChannel = mpsc::Sender<InnerExchange<String>>;
-type PeerReceiverChannel = mpsc::Sender<InnerExchange<String>>;
 
 #[derive(Debug)]
 pub struct PersistentMarkingLB {
@@ -50,7 +51,7 @@ pub enum PersistentMarkingLBError {
 
 impl PersistentMarkingLB {
     pub fn new() -> Self {
-        let (self_tx, self_rx) = watch::channel(RuntimeOrder::NO_ORDER);
+        let (self_tx, self_rx) = watch::channel(RuntimeOrder::NoOrder);
         PersistentMarkingLB {
             front_peers_stream_channels: HashMap::new(),
             front_peers_sink_channels: HashMap::new(),

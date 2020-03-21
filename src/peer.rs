@@ -1,11 +1,13 @@
 use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder};
-use futures::StreamExt;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
+use futures::StreamExt;
+use tokio::stream::StreamExt as TStreamExt;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio::time::Duration;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
 
@@ -85,13 +87,19 @@ pub trait PeerHalveRuntime {
 
 impl PeerHalveRuntime for StreamPeerHalve {
     fn start(mut self) {
-        let _read_task = move || async move {
+        let read_task = move || async move {
             info!(
                 "Spawning read task for the client {}",
                 self.halve.metadata.uuid
             );
             loop {
-                let line = self.tcp_stream.next().await;
+                ///
+                /// impossible
+                // let should_not = self.halve.rx.recv().await;
+                // debug!("PeerHalveStream result from rx : {:?}", should_not);
+                ///
+                ///
+                let line = futures::stream::StreamExt::next(&mut self.tcp_stream).await;
                 // let line = tokio::stream::StreamExt::next(&mut tcp_stream).await;
 
                 match line {
@@ -102,46 +110,42 @@ impl PeerHalveRuntime for StreamPeerHalve {
                         debug!("Peer terminated connection");
                         break;
                     }
-                    _ => {}
                 }
             }
         };
+        tokio::task::spawn(read_task());
     }
 }
 
 impl PeerHalveRuntime for SinkPeerHalve {
     fn start(mut self) {
-        let _write_task = move || async move {
+        let write_task = move || async move {
             info!(
                 "Spawning writing task for the client {}",
                 self.halve.metadata.uuid
             );
-
-            debug!("bizarre");
-            if let Some(sink_order) = self.halve.rx.recv().await {
-                info!("Got order from another task to sink");
-                match sink_order {
-                    InnerExchange::START => {
-                        info!("Starting the writing");
+            loop {
+                // self.tcp_sink.
+                if let Some(sink_order) = self.halve.rx.recv().await {
+                    info!("Got order from another task to sink");
+                    match sink_order {
+                        InnerExchange::START => {
+                            info!("Starting the writing");
+                        }
+                        InnerExchange::PAUSE => {
+                            info!("Pause the writing");
+                        }
+                        InnerExchange::WRITE(_payload) => {
+                            info!("WRITING PAYLOADDDD");
+                            // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
+                        }
                     }
-                    InnerExchange::PAUSE => {
-                        info!("Pause the writing");
-                    }
-                    InnerExchange::WRITE(_payload) => {
-                        info!("WRITING PAYLOADDDD");
-                        // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
-                    }
+                } else {
+                    info!("Weird got nothing");
                 }
             }
-
-            // let test_send_all_data = vec!["Salut", "Je", "m'appel", "toto", "et", "c'est", "finis"];
-            // let owned_str = test_send_all_data.into_iter().map(|str| String::from(str));
-            // let mut stream_data = futures::stream::iter(test_send_all_data);
-
-            // let mut toto = futures::stream::once(async { stream_data });
-            // tcp_sink.send("Toto".to_string());
-            // tcp_sink.send_all(&mut toto).await;
         };
+        tokio::task::spawn(write_task());
     }
 }
 
