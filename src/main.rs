@@ -9,18 +9,18 @@ pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
 
-use crate::peer::{peer_halves, PeerHalveRuntime, SinkPeerHalve, StreamPeerHalve};
-use futures::prelude::*;
-use peer::Peer;
+use crate::peer::{peer_halves, PeerHalveRuntime};
+
+
 use persistent_marking_lb::{InnerExchange, PersistentMarkingLB, RuntimeOrder};
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::stream::StreamExt;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::watch::Receiver;
-use tokio::task;
-use tokio::time::{delay_for, Duration};
-use tokio_util::codec::{Framed, LinesCodec};
+
+
+
+
+
+
 
 type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
 
@@ -101,7 +101,7 @@ async fn handle_new_client(runtime: PersistentMarkingLBRuntime, tcp_stream: TcpS
             // process_socket_io(peer, frame).await;
             // runtime.lock().unwrap().add_peer_test(peer);
         }
-        Err(err) => {
+        Err(_err) => {
             error!("Not able to retrieve client socket address");
         }
     }
@@ -112,12 +112,12 @@ async fn main() {
     pretty_env_logger::init();
     debug!("Starting listener!");
 
-    let mut runtime: PersistentMarkingLBRuntime =
+    let runtime: PersistentMarkingLBRuntime =
         Arc::new(Mutex::new(persistent_marking_lb::PersistentMarkingLB::new()));
 
     let addr = "127.0.0.1:7999";
 
-    let mut listener_res = TcpListener::bind(addr);
+    let listener_res = TcpListener::bind(addr);
     let lb_server = async move {
         match listener_res.await {
             Ok(mut listener_res) => loop {

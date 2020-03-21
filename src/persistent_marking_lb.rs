@@ -1,9 +1,9 @@
-use crate::peer::{Peer, SinkPeerHalve, StreamPeerHalve};
-use futures::{Stream, TryStream};
+use crate::peer::{SinkPeerHalve, StreamPeerHalve};
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::vec::Vec;
+
+
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use uuid::Uuid;

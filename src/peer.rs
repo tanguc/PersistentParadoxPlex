@@ -3,7 +3,7 @@ use futures::StreamExt;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
-use tokio::stream::Stream;
+
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_util::codec::{Framed, LinesCodec};
@@ -69,11 +69,11 @@ pub fn peer_halves(
     runtime_rx: watch::Receiver<RuntimeOrder>,
 ) -> (SinkPeerHalve, StreamPeerHalve) {
     let frame = Framed::new(tcp_stream, LinesCodec::new());
-    let (mut tcp_sink, mut tcp_stream) = frame.split::<String>();
+    let (tcp_sink, tcp_stream) = frame.split::<String>();
 
-    let mut peer_sink: SinkPeerHalve =
+    let peer_sink: SinkPeerHalve =
         SinkPeerHalve::new(tcp_sink, runtime_rx.clone(), socket_addr.clone());
-    let mut peer_stream: StreamPeerHalve =
+    let peer_stream: StreamPeerHalve =
         StreamPeerHalve::new(tcp_stream, runtime_rx.clone(), socket_addr.clone());
 
     (peer_sink, peer_stream)
@@ -85,7 +85,7 @@ pub trait PeerHalveRuntime {
 
 impl PeerHalveRuntime for StreamPeerHalve {
     fn start(mut self) {
-        let read_task = move || async move {
+        let _read_task = move || async move {
             info!(
                 "Spawning read task for the client {}",
                 self.halve.metadata.uuid
@@ -111,7 +111,7 @@ impl PeerHalveRuntime for StreamPeerHalve {
 
 impl PeerHalveRuntime for SinkPeerHalve {
     fn start(mut self) {
-        let write_task = move || async move {
+        let _write_task = move || async move {
             info!(
                 "Spawning writing task for the client {}",
                 self.halve.metadata.uuid
@@ -127,7 +127,7 @@ impl PeerHalveRuntime for SinkPeerHalve {
                     InnerExchange::PAUSE => {
                         info!("Pause the writing");
                     }
-                    InnerExchange::WRITE(payload) => {
+                    InnerExchange::WRITE(_payload) => {
                         info!("WRITING PAYLOADDDD");
                         // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
                     }
