@@ -9,7 +9,7 @@ pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
 
-use crate::peer::{peer_halves, PeerHalveRuntime};
+use crate::peer::{create_peer_halves, PeerHalveRuntime};
 
 use crate::persistent_marking_lb::InnerExchange;
 use futures::StreamExt;
@@ -36,18 +36,16 @@ async fn dummy_task_for_writing(
     }
 }
 
-async fn handle_new_client(runtime: PersistentMarkingLBRuntime, tcp_stream: TcpStream) {
+async fn handle_new_client(runtime: &mut PersistentMarkingLB, tcp_stream: TcpStream) {
     info!("New client connected");
 
     match tcp_stream.peer_addr() {
         Ok(peer_addr) => {
             debug!("Got client addr");
-            // let mut peer = Peer::new(runtime.lock().unwrap().self_rx.clone());
-
             let (peer_sink, peer_stream) =
-                peer_halves(tcp_stream, peer_addr, runtime.lock().await.tx.clone());
+                create_peer_halves(tcp_stream, peer_addr, runtime.tx.clone());
 
-            PersistentMarkingLB::add_peer_halves(runtime, &peer_sink, &peer_stream);
+            runtime.add_peer_halves(&peer_sink, &peer_stream).await;
 
             //debug purposes
             tokio::spawn(dummy_task_for_writing(peer_sink.halve.tx.clone()));
@@ -66,7 +64,7 @@ async fn main() {
     pretty_env_logger::init();
     debug!("Starting listener!");
 
-    let runtime = PersistentMarkingLB::new();
+    let mut runtime = PersistentMarkingLB::new();
 
     let addr = "127.0.0.1:7999";
 
@@ -79,7 +77,7 @@ async fn main() {
                 while let Some(client_stream) = incoming_streams.next().await {
                     match client_stream {
                         Ok(client_stream) => {
-                            handle_new_client(runtime.clone(), client_stream).await;
+                            handle_new_client(&mut runtime, client_stream).await;
                         }
                         Err(_err) => {
                             error!("Cannot process the incoming client stream");

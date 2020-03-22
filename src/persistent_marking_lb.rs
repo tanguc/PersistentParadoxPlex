@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use std::borrow::BorrowMut;
+use std::fmt::{Debug, Error, Formatter};
 use std::sync::Arc;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::Sender;
@@ -30,9 +31,7 @@ pub type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
 pub type RuntimeOrderTxChannel = mpsc::Sender<RuntimeOrder>;
 
 #[derive(Debug)]
-pub struct PersistentMarkingLB {
-    pub tx: RuntimeOrderTxChannel,
-
+pub struct PersistentMarkingPeersPool {
     // Used only for runtime orders
     pub front_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
     pub back_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
@@ -42,6 +41,12 @@ pub struct PersistentMarkingLB {
     pub back_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
 
     pub peers_socket_addr_uuids: HashMap<SocketAddr, Uuid>,
+}
+
+#[derive(Clone)]
+pub struct PersistentMarkingLB {
+    pub tx: RuntimeOrderTxChannel,
+    pub peers_pool: Arc<Mutex<PersistentMarkingPeersPool>>,
 }
 
 pub enum PersistentMarkingLBError {
@@ -57,22 +62,24 @@ enum RuntimeError {
 type RuntimeResult<T> = Result<T, RuntimeError>;
 
 impl PersistentMarkingLB {
-    pub fn new() -> PersistentMarkingLBRuntime {
+    pub fn new() -> PersistentMarkingLB {
         let (tx, rx) = mpsc::channel::<RuntimeOrder>(1000);
-        let runtime = Arc::new(Mutex::new(PersistentMarkingLB {
-            front_peers_stream_tx: HashMap::new(),
-            front_peers_sink_tx: HashMap::new(),
-            back_peers_stream_tx: HashMap::new(),
-            back_peers_sink_tx: HashMap::new(),
+        let runtime = PersistentMarkingLB {
             tx,
-            peers_socket_addr_uuids: HashMap::new(),
-        }));
-        Self::start(runtime.clone(), rx);
+            peers_pool: Arc::new(Mutex::new(PersistentMarkingPeersPool {
+                front_peers_stream_tx: HashMap::new(),
+                front_peers_sink_tx: HashMap::new(),
+                back_peers_stream_tx: HashMap::new(),
+                back_peers_sink_tx: HashMap::new(),
+                peers_socket_addr_uuids: HashMap::new(),
+            })),
+        };
+        runtime.clone().start2(rx);
 
         runtime
     }
 
-    fn start(runtime: PersistentMarkingLBRuntime, mut rx: mpsc::Receiver<RuntimeOrder>) {
+    fn start2(mut self, mut rx: mpsc::Receiver<RuntimeOrder>) {
         let runtime_task = async move {
             debug!("Starting runtime of PersistentMarkingLB");
             match rx.recv().await {
@@ -89,7 +96,19 @@ impl PersistentMarkingLB {
                             debug!("Peer paused");
                         }
                         RuntimeOrder::PeerTerminatedConnection(peer_metadata) => {
-                            Self::handle_peer_termination(runtime, peer_metadata).await;
+                            {
+                                let scope_lock = self.peers_pool.lock().await;
+                                debug!(
+                                    "Before termination hashmap: \n\
+                                {:?}\
+                                \n\
+                                {:?}",
+                                    scope_lock.front_peers_stream_tx,
+                                    scope_lock.front_peers_sink_tx,
+                                );
+                            }
+                            debug!("toto");
+                            self.handle_peer_termination(peer_metadata).await;
                         }
                     }
                 }
@@ -109,24 +128,24 @@ impl PersistentMarkingLB {
     /// and returns the Sender channels of each tasks related to (Sink &
     /// Stream)
     async fn remove_front_peer(
-        runtime: PersistentMarkingLBRuntime,
+        &mut self,
         peer_metadata: PeerMetadata,
     ) -> RuntimeResult<(Option<PeerTxChannel>, Option<PeerTxChannel>)> {
-        let mut locked_runtime = runtime.lock().await;
+        let mut locked_peers_pool = self.peers_pool.lock().await;
 
         let peer_sink_tx;
         let peer_stream_txt;
-        if locked_runtime
+        if locked_peers_pool
             .front_peers_sink_tx
             .contains_key(&peer_metadata.uuid)
-            && locked_runtime
+            && locked_peers_pool
                 .front_peers_stream_tx
                 .contains_key(&peer_metadata.uuid)
         {
-            peer_sink_tx = locked_runtime
+            peer_sink_tx = locked_peers_pool
                 .front_peers_sink_tx
                 .remove(&peer_metadata.uuid);
-            peer_stream_txt = locked_runtime
+            peer_stream_txt = locked_peers_pool
                 .front_peers_stream_tx
                 .remove(&peer_metadata.uuid);
             Ok((peer_sink_tx, peer_stream_txt))
@@ -140,13 +159,10 @@ impl PersistentMarkingLB {
         }
     }
 
-    async fn handle_peer_termination(
-        runtime: PersistentMarkingLBRuntime,
-        peer_metadata: PeerMetadata,
-    ) -> RuntimeResult<()> {
+    async fn handle_peer_termination(&mut self, peer_metadata: PeerMetadata) -> RuntimeResult<()> {
         debug!("Handle peer terminated connection");
 
-        let (peer_sink_tx, _) = Self::remove_front_peer(runtime, peer_metadata.clone()).await?;
+        let (peer_sink_tx, _) = self.remove_front_peer(peer_metadata.clone()).await?;
         let mut peer_sink_tx =
             peer_sink_tx.ok_or(RuntimeError::PeerHalveDown(peer_metadata.clone()))?;
 
@@ -164,21 +180,21 @@ impl PersistentMarkingLB {
     }
 
     pub async fn add_peer_halves(
-        runtime: PersistentMarkingLBRuntime,
+        &mut self,
         peer_sink_halve: &SinkPeerHalve,
         peer_stream_halve: &StreamPeerHalve,
     ) {
-        let mut runtime_locked = runtime.lock().await;
+        let mut locked_peers_pool = self.peers_pool.lock().await;
 
-        runtime_locked.front_peers_stream_tx.insert(
+        locked_peers_pool.front_peers_stream_tx.insert(
             peer_stream_halve.halve.metadata.uuid,
             peer_stream_halve.halve.tx.clone(),
         );
-        runtime_locked.front_peers_sink_tx.insert(
+        locked_peers_pool.front_peers_sink_tx.insert(
             peer_sink_halve.halve.metadata.uuid,
             peer_sink_halve.halve.tx.clone(),
         );
-        runtime_locked.peers_socket_addr_uuids.insert(
+        locked_peers_pool.peers_socket_addr_uuids.insert(
             peer_sink_halve.halve.metadata.socket_addr,
             peer_sink_halve.halve.metadata.uuid,
         );

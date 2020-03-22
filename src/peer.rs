@@ -84,18 +84,19 @@ pub enum PeerError {
 
 /// Create sink (write) & stream (read) halves for the
 /// given TcpStream
-pub fn peer_halves(
+pub fn create_peer_halves(
     tcp_stream: TcpStream,
     socket_addr: SocketAddr,
     runtime_tx: RuntimeOrderTxChannel,
 ) -> (SinkPeerHalve, StreamPeerHalve) {
     let frame = Framed::new(tcp_stream, LinesCodec::new());
     let (tcp_sink, tcp_stream) = frame.split::<String>();
+    let uuid = Uuid::new_v4();
 
     let peer_sink: SinkPeerHalve =
-        SinkPeerHalve::new(tcp_sink, runtime_tx.clone(), socket_addr.clone());
+        SinkPeerHalve::new(tcp_sink, uuid, runtime_tx.clone(), socket_addr.clone());
     let peer_stream: StreamPeerHalve =
-        StreamPeerHalve::new(tcp_stream, runtime_tx.clone(), socket_addr.clone());
+        StreamPeerHalve::new(tcp_stream, uuid, runtime_tx.clone(), socket_addr.clone());
 
     (peer_sink, peer_stream)
 }
@@ -178,11 +179,12 @@ impl PeerHalveRuntime for SinkPeerHalve {
 impl SinkPeerHalve {
     pub fn new(
         tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
+        uuid: Uuid,
         runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
     ) -> Self {
         SinkPeerHalve {
-            halve: PeerHalve::new(runtime_tx, socket_addr),
+            halve: PeerHalve::new(uuid, runtime_tx, socket_addr),
             tcp_sink,
         }
     }
@@ -191,24 +193,22 @@ impl SinkPeerHalve {
 impl StreamPeerHalve {
     pub fn new(
         tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>,
+        uuid: Uuid,
         runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
     ) -> Self {
         StreamPeerHalve {
-            halve: PeerHalve::new(runtime_tx, socket_addr),
+            halve: PeerHalve::new(uuid, runtime_tx, socket_addr),
             tcp_stream,
         }
     }
 }
 
 impl PeerHalve {
-    pub fn new(runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
+    pub fn new(uuid: Uuid, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
         let (tx, rx) = mpsc::channel::<InnerExchange<String>>(1000);
         PeerHalve {
-            metadata: PeerMetadata {
-                uuid: Uuid::new_v4(),
-                socket_addr,
-            },
+            metadata: PeerMetadata { uuid, socket_addr },
             runtime_tx,
             rx,
             tx,
