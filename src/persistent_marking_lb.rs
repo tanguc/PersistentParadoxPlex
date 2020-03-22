@@ -3,9 +3,10 @@ use crate::peer::{PeerMetadata, PeerRxChannel, PeerTxChannel, SinkPeerHalve, Str
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-// use futures::lock::Mutex;
 use std::borrow::BorrowMut;
 use std::sync::Arc;
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, watch, Mutex};
 use uuid::Uuid;
 
@@ -47,8 +48,16 @@ pub enum PersistentMarkingLBError {
     CannotHandleClient,
 }
 
+enum RuntimeError {
+    PeerReferenceNotFound(PeerMetadata),
+    PeerHalveDown(PeerMetadata),
+    PeerChannelCommunicationError(PeerMetadata),
+}
+
+type RuntimeResult<T> = Result<T, RuntimeError>;
+
 impl PersistentMarkingLB {
-    pub fn new() -> Arc<Mutex<Self>> {
+    pub fn new() -> PersistentMarkingLBRuntime {
         let (tx, rx) = mpsc::channel::<RuntimeOrder>(1000);
         let runtime = Arc::new(Mutex::new(PersistentMarkingLB {
             front_peers_stream_tx: HashMap::new(),
@@ -63,7 +72,7 @@ impl PersistentMarkingLB {
         runtime
     }
 
-    fn start(runtime: Arc<Mutex<PersistentMarkingLB>>, mut rx: mpsc::Receiver<RuntimeOrder>) {
+    fn start(runtime: PersistentMarkingLBRuntime, mut rx: mpsc::Receiver<RuntimeOrder>) {
         let runtime_task = async move {
             debug!("Starting runtime of PersistentMarkingLB");
             match rx.recv().await {
@@ -96,75 +105,80 @@ impl PersistentMarkingLB {
         tokio::task::spawn(runtime_task);
     }
 
-    async fn handle_peer_termination(
-        runtime: Arc<Mutex<PersistentMarkingLB>>,
+    /// Remove reference of the front peer
+    /// and returns the Sender channels of each tasks related to (Sink &
+    /// Stream)
+    async fn remove_front_peer(
+        runtime: PersistentMarkingLBRuntime,
         peer_metadata: PeerMetadata,
-    ) {
-        debug!("Peer terminated connection");
+    ) -> RuntimeResult<(Option<PeerTxChannel>, Option<PeerTxChannel>)> {
+        let mut locked_runtime = runtime.lock().await;
 
-        // Delete from map & notify the sink task of the peer could be done
-        // separately
-        let mut peer_to_notify = Option::None;
-
-        {
-            let mut locked_runtime = runtime.lock().await;
-
-            if locked_runtime
-                .front_peers_sink_tx
+        let peer_sink_tx;
+        let peer_stream_txt;
+        if locked_runtime
+            .front_peers_sink_tx
+            .contains_key(&peer_metadata.uuid)
+            && locked_runtime
+                .front_peers_stream_tx
                 .contains_key(&peer_metadata.uuid)
-                && locked_runtime
-                    .front_peers_stream_tx
-                    .contains_key(&peer_metadata.uuid)
-            {
-                peer_to_notify = locked_runtime
-                    .front_peers_sink_tx
-                    .remove(&peer_metadata.uuid);
-                locked_runtime
-                    .front_peers_stream_tx
-                    .remove(&peer_metadata.uuid);
-            } else {
-                warn!(
-                    "The sink or stream channels have not been found for the \
+        {
+            peer_sink_tx = locked_runtime
+                .front_peers_sink_tx
+                .remove(&peer_metadata.uuid);
+            peer_stream_txt = locked_runtime
+                .front_peers_stream_tx
+                .remove(&peer_metadata.uuid);
+            Ok((peer_sink_tx, peer_stream_txt))
+        } else {
+            warn!(
+                "The sink or stream channels have not been found for the \
                     following peer: {}",
-                    peer_metadata
-                );
-            }
+                peer_metadata
+            );
+            Err(RuntimeError::PeerReferenceNotFound(peer_metadata))
         }
+    }
 
-        if let Some(mut peer_to_notify_channel) = peer_to_notify {
-            if let Err(err) = peer_to_notify_channel
-                .send(InnerExchange::FromRuntime(RuntimeOrder::ShutdownPeer))
-                .await
-            {
+    async fn handle_peer_termination(
+        runtime: PersistentMarkingLBRuntime,
+        peer_metadata: PeerMetadata,
+    ) -> RuntimeResult<()> {
+        debug!("Handle peer terminated connection");
+
+        let (peer_sink_tx, _) = Self::remove_front_peer(runtime, peer_metadata.clone()).await?;
+        let mut peer_sink_tx =
+            peer_sink_tx.ok_or(RuntimeError::PeerHalveDown(peer_metadata.clone()))?;
+
+        peer_sink_tx
+            .send(InnerExchange::FromRuntime(RuntimeOrder::ShutdownPeer))
+            .await
+            .map_err(|_| {
                 error!(
                     "Cannot send a termination order to the sink task \
                     of the peer : {}",
                     peer_metadata
                 );
-            }
-        }
-
-        // debug!(
-        //     "Removing sink for the peer : {}, \
-        //                     sending an order via channel",
-        //     peer_metadata
-        // );
+                RuntimeError::PeerChannelCommunicationError(peer_metadata.clone())
+            })
     }
 
-    pub fn add_peer_halves(
-        &mut self,
+    pub async fn add_peer_halves(
+        runtime: PersistentMarkingLBRuntime,
         peer_sink_halve: &SinkPeerHalve,
         peer_stream_halve: &StreamPeerHalve,
     ) {
-        self.front_peers_stream_tx.insert(
+        let mut runtime_locked = runtime.lock().await;
+
+        runtime_locked.front_peers_stream_tx.insert(
             peer_stream_halve.halve.metadata.uuid,
             peer_stream_halve.halve.tx.clone(),
         );
-        self.front_peers_sink_tx.insert(
+        runtime_locked.front_peers_sink_tx.insert(
             peer_sink_halve.halve.metadata.uuid,
             peer_sink_halve.halve.tx.clone(),
         );
-        self.peers_socket_addr_uuids.insert(
+        runtime_locked.peers_socket_addr_uuids.insert(
             peer_sink_halve.halve.metadata.socket_addr,
             peer_sink_halve.halve.metadata.uuid,
         );

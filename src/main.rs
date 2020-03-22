@@ -47,10 +47,7 @@ async fn handle_new_client(runtime: PersistentMarkingLBRuntime, tcp_stream: TcpS
             let (peer_sink, peer_stream) =
                 peer_halves(tcp_stream, peer_addr, runtime.lock().await.tx.clone());
 
-            runtime
-                .lock()
-                .await
-                .add_peer_halves(&peer_sink, &peer_stream);
+            PersistentMarkingLB::add_peer_halves(runtime, &peer_sink, &peer_stream);
 
             //debug purposes
             tokio::spawn(dummy_task_for_writing(peer_sink.halve.tx.clone()));
