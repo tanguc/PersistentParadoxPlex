@@ -13,10 +13,10 @@ use crate::peer::{create_peer_halves, PeerHalveRuntime};
 
 use crate::persistent_marking_lb::InnerExchange;
 use futures::StreamExt;
-use persistent_marking_lb::{PersistentMarkingLB, PersistentMarkingLBRuntime};
-use std::sync::Arc;
+use persistent_marking_lb::{PersistentMarkingLB};
+
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+
 use tokio::time::{delay_for, Duration};
 
 async fn dummy_task_for_writing(

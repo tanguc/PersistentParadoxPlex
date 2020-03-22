@@ -1,14 +1,14 @@
-use crate::peer::{PeerMetadata, PeerRxChannel, PeerTxChannel, SinkPeerHalve, StreamPeerHalve};
+use crate::peer::{PeerMetadata, PeerTxChannel, SinkPeerHalve, StreamPeerHalve};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use std::borrow::BorrowMut;
-use std::fmt::{Debug, Error, Formatter};
+
+use std::fmt::{Debug};
 use std::sync::Arc;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{mpsc, watch, Mutex};
+
+
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
