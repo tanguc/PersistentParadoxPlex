@@ -34,12 +34,6 @@ pub struct Peer {
     pub sink_channel_rx: PeerRxChannel,
 }
 
-// pub struct PeerHalve {
-//     pub runtime_rx: watch::Receiver<RuntimeOrder>,
-//     pub rx: T<InnerExchange<String>>,
-//     pub tx: T<InnerExchange<String>>,
-// }
-
 #[derive(Clone)]
 pub struct PeerMetadata {
     pub uuid: Uuid,

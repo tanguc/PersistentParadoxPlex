@@ -3,11 +3,10 @@ use crate::peer::{PeerMetadata, PeerRxChannel, PeerTxChannel, SinkPeerHalve, Str
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use futures::lock::Mutex;
+// use futures::lock::Mutex;
 use std::borrow::BorrowMut;
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch, Mutex};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -102,21 +101,38 @@ impl PersistentMarkingLB {
         peer_metadata: PeerMetadata,
     ) {
         debug!("Peer terminated connection");
-        let mut locked_runtime = runtime.lock().await;
-        locked_runtime
-            .front_peers_stream_tx
-            .remove(&peer_metadata.uuid);
 
-        if let Some(peer_sink) = locked_runtime
-            .front_peers_sink_tx
-            .get_mut(&peer_metadata.uuid)
+        // Delete from map & notify the sink task of the peer could be done
+        // separately
+        let mut peer_to_notify = Option::None;
+
         {
-            debug!(
-                "Removing sink for the peer : {}, \
-                                sending an order via channel",
-                peer_metadata
-            );
-            if let Err(err) = peer_sink
+            let mut locked_runtime = runtime.lock().await;
+
+            if locked_runtime
+                .front_peers_sink_tx
+                .contains_key(&peer_metadata.uuid)
+                && locked_runtime
+                    .front_peers_stream_tx
+                    .contains_key(&peer_metadata.uuid)
+            {
+                peer_to_notify = locked_runtime
+                    .front_peers_sink_tx
+                    .remove(&peer_metadata.uuid);
+                locked_runtime
+                    .front_peers_stream_tx
+                    .remove(&peer_metadata.uuid);
+            } else {
+                warn!(
+                    "The sink or stream channels have not been found for the \
+                    following peer: {}",
+                    peer_metadata
+                );
+            }
+        }
+
+        if let Some(mut peer_to_notify_channel) = peer_to_notify {
+            if let Err(err) = peer_to_notify_channel
                 .send(InnerExchange::FromRuntime(RuntimeOrder::ShutdownPeer))
                 .await
             {
@@ -126,13 +142,13 @@ impl PersistentMarkingLB {
                     peer_metadata
                 );
             }
-        } else {
-            warn!(
-                "The sink channel has not been found for the following \
-            peer: {}",
-                peer_metadata
-            );
         }
+
+        // debug!(
+        //     "Removing sink for the peer : {}, \
+        //                     sending an order via channel",
+        //     peer_metadata
+        // );
     }
 
     pub fn add_peer_halves(
