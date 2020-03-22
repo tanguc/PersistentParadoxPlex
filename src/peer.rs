@@ -5,9 +5,7 @@ use tokio::net::TcpStream;
 
 use futures::StreamExt;
 
-
 use tokio::sync::mpsc;
-
 
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
@@ -34,7 +32,7 @@ pub struct Peer {
     pub sink_channel_rx: PeerRxChannel,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct PeerMetadata {
     pub uuid: Uuid,
     pub socket_addr: SocketAddr,
@@ -229,5 +227,33 @@ impl Peer {
             sink_channel_rx,
             sink_channel_tx,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::persistent_marking_lb::RuntimeOrder;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::mpsc;
+    use tokio::time::{delay_for, Duration};
+
+    #[tokio::test]
+    async fn test_create_peer_halves() {
+        let addr = String::from("127.0.0.1:59403");
+        let tcp_listener = TcpListener::bind(addr.clone());
+        let mock_tcp_client_task = async move {
+            delay_for(Duration::from_secs(1)).await;
+            let _tcp_stream = TcpStream::connect(addr.clone()).await.unwrap();
+        };
+        tokio::task::spawn(mock_tcp_client_task);
+        let (tcp_socket, socket_addr) = tcp_listener.await.unwrap().accept().await.unwrap();
+        debug!("Client connected");
+        let (runtime_tx, _) = mpsc::channel::<RuntimeOrder>(1);
+
+        let peer_halves = super::create_peer_halves(tcp_socket, socket_addr, runtime_tx);
+        assert_eq!(
+            peer_halves.0.halve.metadata, peer_halves.1.halve.metadata,
+            "Halves of the same peer do not have same UUID"
+        );
     }
 }

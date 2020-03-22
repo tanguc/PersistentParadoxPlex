@@ -3,15 +3,13 @@ use crate::peer::{PeerMetadata, PeerTxChannel, SinkPeerHalve, StreamPeerHalve};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::sync::Arc;
-
 
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InnerExchange<T> {
     Start,
     Pause,
@@ -19,7 +17,7 @@ pub enum InnerExchange<T> {
     FromRuntime(RuntimeOrder),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeOrder {
     NoOrder,
     ShutdownPeer,
