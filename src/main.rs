@@ -28,7 +28,7 @@ async fn dummy_task_for_writing(
         delay_for(Duration::from_secs(2)).await;
         let dummy_message = format!("DUMMY ANSWER {}", i);
         let res = peer_sink_tx_channel
-            .send(InnerExchange::WRITE(dummy_message))
+            .send(InnerExchange::Write(dummy_message))
             .await;
         debug!("Sent message from dummy, res : {:?}", res);
         i = i + 1;
@@ -44,11 +44,11 @@ async fn handle_new_client(runtime: PersistentMarkingLBRuntime, tcp_stream: TcpS
             // let mut peer = Peer::new(runtime.lock().unwrap().self_rx.clone());
 
             let (peer_sink, peer_stream) =
-                peer_halves(tcp_stream, peer_addr, runtime.lock().unwrap().tx.clone());
+                peer_halves(tcp_stream, peer_addr, runtime.lock().await.tx.clone());
 
             runtime
                 .lock()
-                .unwrap()
+                .await
                 .add_peer_halves(&peer_sink, &peer_stream);
 
             //debug purposes

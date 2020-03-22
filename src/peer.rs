@@ -1,9 +1,10 @@
 use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder, RuntimeOrderTxChannel};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Error, Formatter};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
 use futures::StreamExt;
+use tokio::runtime::Runtime;
 use tokio::stream::StreamExt as TStreamExt;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -39,9 +40,31 @@ pub struct Peer {
 //     pub tx: T<InnerExchange<String>>,
 // }
 
+#[derive(Clone)]
 pub struct PeerMetadata {
     pub uuid: Uuid,
     pub socket_addr: SocketAddr,
+}
+
+impl Debug for PeerMetadata {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.debug_struct("PeerMetadata")
+            .field("uuid", &self.uuid)
+            .field("socket_addr", &self.socket_addr)
+            .finish()
+    }
+}
+
+impl Display for PeerMetadata {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.write_fmt(format_args!(
+            "Peer's metadata \
+            UUID: {}\
+            SocketAddr: {}\
+        ",
+            self.uuid, self.socket_addr
+        ))
+    }
 }
 
 pub struct PeerHalve {
@@ -102,7 +125,18 @@ impl PeerHalveRuntime for StreamPeerHalve {
                     }
                     None => {
                         debug!("Peer terminated connection, notifying runtime");
-                        // self.halve.runtime_rx.
+                        if let Err(err) = self
+                            .halve
+                            .runtime_tx
+                            .send(RuntimeOrder::PeerTerminatedConnection(self.halve.metadata))
+                            .await
+                        {
+                            error!(
+                                "Could not send the termination of the \
+                            peer to the runtime via channel, reason : {}",
+                                err
+                            );
+                        }
                         break;
                     }
                 }
@@ -124,15 +158,18 @@ impl PeerHalveRuntime for SinkPeerHalve {
                 if let Some(sink_order) = self.halve.rx.recv().await {
                     info!("Got order from another task to sink");
                     match sink_order {
-                        InnerExchange::START => {
+                        InnerExchange::Start => {
                             info!("Starting the writing");
                         }
-                        InnerExchange::PAUSE => {
+                        InnerExchange::Pause => {
                             info!("Pause the writing");
                         }
-                        InnerExchange::WRITE(_payload) => {
+                        InnerExchange::Write(_payload) => {
                             info!("WRITING PAYLOADDDD");
                             // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
+                        }
+                        InnerExchange::FromRuntime(runtime_order) => {
+                            info!("Got an order from runtime : {:?}", runtime_order);
                         }
                     }
                 } else {
