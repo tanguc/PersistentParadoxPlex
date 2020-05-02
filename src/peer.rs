@@ -82,6 +82,7 @@ pub enum PeerError {
 
 /// Create sink (write) & stream (read) halves for the
 /// given TcpStream
+/// Either the stream or the sink halve, are under the same UUID (same client)
 pub fn create_peer_halves(
     tcp_stream: TcpStream,
     socket_addr: SocketAddr,
@@ -115,6 +116,12 @@ impl PeerHalveRuntime for StreamPeerHalve {
                 match line {
                     Some(line) => {
                         debug!("Got a new line : {:?}", line);
+
+
+                        /// choice a back peer (downstream)
+                        /// send via the channel the string(buffer)
+                        /// 
+
                     }
                     None => {
                         debug!("Peer terminated connection, notifying runtime");

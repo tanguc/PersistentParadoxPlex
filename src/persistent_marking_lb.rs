@@ -105,7 +105,6 @@ impl PersistentMarkingLB {
                                     scope_lock.front_peers_sink_tx,
                                 );
                             }
-                            debug!("toto");
                             self.handle_peer_termination(peer_metadata).await;
                         }
                     }

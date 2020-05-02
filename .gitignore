@@ -38,3 +38,5 @@ Cargo.lock
 .idea/**/dbnavigator.xml
 
 .cargo
+
+.DS_STORE

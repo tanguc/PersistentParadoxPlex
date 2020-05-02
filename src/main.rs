@@ -5,6 +5,8 @@ extern crate tokio_util;
 extern crate log;
 extern crate uuid;
 
+use std::net::Ipv4Addr;
+
 pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
@@ -13,7 +15,7 @@ use crate::peer::{create_peer_halves, PeerHalveRuntime};
 
 use crate::persistent_marking_lb::InnerExchange;
 use futures::StreamExt;
-use persistent_marking_lb::{PersistentMarkingLB};
+use persistent_marking_lb::PersistentMarkingLB;
 
 use tokio::net::{TcpListener, TcpStream};
 
@@ -59,10 +61,30 @@ async fn handle_new_client(runtime: &mut PersistentMarkingLB, tcp_stream: TcpStr
     }
 }
 
+pub struct BackPeer {
+    pub ip: Ipv4Addr,
+    pub port: u16,
+}
+
+fn get_back_peers() -> Vec<BackPeer> {
+    debug!("Creating backend peers");
+
+    let back_peers = vec![];
+
+    back_peers.push(BackPeer {
+        ip: "127.0.0.1".parse().unwrap(),
+        port: 7801,
+    });
+
+    back_peers
+}
+
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
     debug!("Starting listener!");
+
+    get_back_peers();
 
     let mut runtime = PersistentMarkingLB::new();
 
