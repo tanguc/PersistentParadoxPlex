@@ -13,3 +13,9 @@ log = "0.4.8"
 futures = "0.3.4"
 tokio-util = { version = "0.3.0", features = ["codec"] }
 uuid = {version = "0.8.1", features = ["v4"]}
+tonic = { version = "0.2.0" }
+tonic-build = "0.2"
+prost = "0.6"
+futures-core = "0.3.4"
+futures-util = "0.3.4"
+async-trait = "0.1.30"

@@ -10,6 +10,7 @@ use std::net::Ipv4Addr;
 pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
+pub mod backend_peers;
 
 use crate::peer::{create_peer_halves, PeerHalveRuntime};
 
@@ -69,7 +70,7 @@ pub struct BackPeer {
 fn get_back_peers() -> Vec<BackPeer> {
     debug!("Creating backend peers");
 
-    let back_peers = vec![];
+    let mut back_peers = vec![];
 
     back_peers.push(BackPeer {
         ip: "127.0.0.1".parse().unwrap(),
@@ -81,6 +82,10 @@ fn get_back_peers() -> Vec<BackPeer> {
 
 #[tokio::main]
 async fn main() {
+
+
+    backend_peers::init_tonic();
+
     pretty_env_logger::init();
     debug!("Starting listener!");
 

@@ -52,8 +52,7 @@ impl Display for PeerMetadata {
         f.write_fmt(format_args!(
             "Peer's metadata \
             UUID: {}\
-            SocketAddr: {}\
-        ",
+            SocketAddr: {}",
             self.uuid, self.socket_addr
         ))
     }
@@ -118,9 +117,8 @@ impl PeerHalveRuntime for StreamPeerHalve {
                         debug!("Got a new line : {:?}", line);
 
 
-                        /// choice a back peer (downstream)
-                        /// send via the channel the string(buffer)
-                        /// 
+                        // choice a back peer (downstream)
+                        // send via the channel the string(buffer)
 
                     }
                     None => {
