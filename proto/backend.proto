@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package backendpeer;
+package backend;
 
 message header {
   string address = 1;

@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, watch};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -22,11 +22,14 @@ pub enum RuntimeOrder {
     NoOrder,
     ShutdownPeer,
     PausePeer,
+    GotMessageFromUpstreamPeer(String),
+    GotMessageFromDownstream(String),
     PeerTerminatedConnection(PeerMetadata),
 }
 
 pub type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
 pub type RuntimeOrderTxChannel = mpsc::Sender<RuntimeOrder>;
+pub type RuntimeOrderRxChannel = watch::Receiver<RuntimeOrder>;
 
 #[derive(Debug)]
 pub struct PersistentMarkingPeersPool {
@@ -106,6 +109,12 @@ impl PersistentMarkingLB {
                                 );
                             }
                             self.handle_peer_termination(peer_metadata).await;
+                        }
+                        RuntimeOrder::GotMessageFromUpstreamPeer(_) => {
+                            debug!("GotMessageFromUpstreamPeer")
+                        }
+                        RuntimeOrder::GotMessageFromDownstream(_) => {
+                            debug!("GotMessageFromDownstream")
                         }
                     }
                 }

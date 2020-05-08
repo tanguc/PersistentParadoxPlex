@@ -1,3 +1,4 @@
+#![feature(trace_macros)]
 extern crate pretty_env_logger;
 extern crate tokio;
 extern crate tokio_util;
@@ -7,10 +8,10 @@ extern crate uuid;
 
 use std::net::Ipv4Addr;
 
+pub mod upstream_peer;
 pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
-pub mod backend_peers;
 
 use crate::peer::{create_peer_halves, PeerHalveRuntime};
 
@@ -84,7 +85,9 @@ fn get_back_peers() -> Vec<BackPeer> {
 async fn main() {
 
 
-    backend_peers::init_tonic();
+    // upstream_peer::compile_protos();
+
+    // upstream_peer::
 
     pretty_env_logger::init();
     debug!("Starting listener!");

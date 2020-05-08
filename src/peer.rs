@@ -116,10 +116,8 @@ impl PeerHalveRuntime for StreamPeerHalve {
                     Some(line) => {
                         debug!("Got a new line : {:?}", line);
 
-
                         // choice a back peer (downstream)
                         // send via the channel the string(buffer)
-
                     }
                     None => {
                         debug!("Peer terminated connection, notifying runtime");
