@@ -1,4 +1,3 @@
-use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder, RuntimeOrderTxChannel};
 use std::fmt::{Debug, Display, Error, Formatter};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
@@ -9,7 +8,9 @@ use tokio::sync::mpsc;
 
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
+use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder, RuntimeOrderTxChannel};
 use crate::UpstreamPeerMetadata;
+use crate::backend;
 
 pub trait FrontEndPeer {}
 pub trait BackEndPeer {}
@@ -60,8 +61,9 @@ pub struct DownstreamPeerSinkHalve {
     pub tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
 }
 
-pub struct UpstreamPeerStreamHalve {
-    pub halve: PeerHalve
+pub struct UpstreamPeerStreamHalve<T> {
+    pub halve: PeerHalve,
+    pub grpc_tx_channel: tokio::sync::mpsc::UnboundedSender<T>
 }
 
 pub enum PeerError {
@@ -73,18 +75,22 @@ pub enum PeerError {
 /// dedicated task handle the received messages.
 /// The sink itself is a simple channel (mpsc) which will
 /// be retrievable from runtime (to send messages)
-pub fn create_upstream_halves(
+pub fn create_upstream_halves<T>(
     metadata: UpstreamPeerMetadata,
     runtime_tx: RuntimeOrderTxChannel,
-) -> UpstreamPeerStreamHalve {
+) -> UpstreamPeerStreamHalve<T> {
     debug!("Creating upstream peer halves");
     let uuid = Uuid::new_v4();
 
     let stream_halve =
         PeerHalve::new(uuid, runtime_tx.clone(), metadata.into());
 
+    let (mut message_tx, message_rx) =
+        tokio::sync::mpsc::unbounded_channel::<T>();
+
     UpstreamPeerStreamHalve {
-        halve: stream_halve
+        halve: stream_halve,
+        grpc_tx_channel: message_tx
     }
 }
 
@@ -148,6 +154,38 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
             }
         };
         tokio::task::spawn(read_task());
+    }
+}
+
+impl PeerHalveRuntime<T> for UpstreamPeerStreamHalve<T> {
+    fn start(mut self) {
+        debug!("Starting upstream stream halve");
+        tokio::spawn(async {
+
+            let mut connectClient =
+                backend::backend_peer_service_client::BackendPeerServiceClient::connect(
+                    "tcp://:4770"
+                ).await?;
+
+
+            let call_method = connectClient.bidirectional_streaming(
+                tonic::Request::new(self.message_rx)
+            ).await?;
+
+            if let mut methodStream = call_method.into_inner() {
+                debug!("Been able to call the method");
+
+                if let Some(message) = methodStream.message().await? {
+                    debug!("Got a new message : [{:?}]", message);
+                }
+
+            } else {
+                debug!("Cannot call method: because");
+            }
+            debug!("Handle GRPC4");
+
+            Ok::<(), Box<dyn std::error::Error>>(())
+        });
     }
 }
 

@@ -14,7 +14,7 @@ pub mod persistent_marking_lb;
 pub mod utils;
 pub mod backend;
 
-use crate::peer::{create_peer_halves, PeerHalveRuntime};
+use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves};
 
 use crate::persistent_marking_lb::InnerExchange;
 use futures::StreamExt;
@@ -151,16 +151,19 @@ pub fn register_upstream_peers(mut runtime: PersistentMarkingLB) {
     let upstream_peer_metadata = get_upstream_peers();
 
     for upstream_peer_metadata in upstream_peer_metadata {
-        let upstream_peer = create_upstream_peer(upstream_peer_metadata);
-        upstream_peer.start(runtime.tx);
-        runtime.add_upstream_peer(upstream_peer);
+        let upstream_peer = create_upstream_halves(
+            upstream_peer_metadata,
+            runtime.tx.clone()
+        );
+        upstream_peer.start();
+        // runtime.add_upstream_peer(upstream_peer);
     }
-    tokio::spawn(async {
-        debug!("fuck it");
-        if let Err(err) = handle_grcp().await {
-            error!("Error from GRPC : [{:?}]", err);
-        }
-    });
+    // tokio::spawn(async {
+    //     debug!("fuck it");
+    //     if let Err(err) = handle_grcp().await {
+    //         error!("Error from GRPC : [{:?}]", err);
+    //     }
+    // });
 
 }
 
