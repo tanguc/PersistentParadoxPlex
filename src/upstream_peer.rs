@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
-// pub fn compile_protos() {
-//     let path = PathBuf::from("proto/backend.proto");
-//     tonic_build::compile_protos(path).unwrap_or_else(|e| panic!("Failed to compile {:?}", e));
-// }
+pub fn compile_protos() {
+    let path = PathBuf::from("proto/backend.proto");
+    tonic_build::compile_protos(path).unwrap_or_else(|e| panic!("Failed to compile {:?}", e));
+}
 
 
 
@@ -13,7 +13,7 @@ use tokio;
 
 pub mod backend_peer {
     // tonic::include_proto!("backendpeer");
-    include!("protoc_files/backend.rs");
+    include!("backend.rs");
 }
 
 use backend_peer::backend_peer_service_server::BackendPeerService;
@@ -42,6 +42,7 @@ pub struct BackendPeerServiceImpl {
 }
 
 trace_macros!(true);
+
 
 #[tonic::async_trait]
 impl BackendPeerService for BackendPeerServiceImpl {

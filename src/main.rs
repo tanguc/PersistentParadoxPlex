@@ -12,6 +12,7 @@ pub mod upstream_peer;
 pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
+pub mod backend;
 
 use crate::peer::{create_peer_halves, PeerHalveRuntime};
 
@@ -22,6 +23,7 @@ use persistent_marking_lb::PersistentMarkingLB;
 use tokio::net::{TcpListener, TcpStream};
 
 use tokio::time::{delay_for, Duration};
+use crate::upstream_peer::backend_peer::InputStreamRequest;
 
 async fn dummy_task_for_writing(
     mut peer_sink_tx_channel: tokio::sync::mpsc::Sender<InnerExchange<String>>,
@@ -63,37 +65,112 @@ async fn handle_new_client(runtime: &mut PersistentMarkingLB, tcp_stream: TcpStr
     }
 }
 
-pub struct BackPeer {
+pub struct UpstreamPeerMetadata {
     pub ip: Ipv4Addr,
     pub port: u16,
 }
 
-fn get_back_peers() -> Vec<BackPeer> {
-    debug!("Creating backend peers");
+async fn handle_grcp() -> Result<(), Box<dyn std::error::Error>> {
+    debug!("Handle GRPC");
+    let mut connectClient =
+        backend::backend_peer_service_client::BackendPeerServiceClient::connect(
+            "tcp://:4770"
+        ).await?;
+    debug!("Handle GRPC1");
+
+    let (mut message_tx, message_rx) =
+        tokio::sync::mpsc::unbounded_channel::<backend::InputStreamRequest>();
+
+    debug!("Handle GRPC2");
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            let mut body = backend::InputStreamRequest {
+                header: Option::Some(backend::Header {
+                    address: "823.12938I.3291833.".to_string(),
+                    time: "12:32:12".to_string()
+                }),
+                payload: "Task spawn - client send fake data".to_string()
+            };
+            if let Err(err) = message_tx.send(body) {
+                debug!("Cannot send message from client (spawn task): [{:?}]", err);
+            } else {
+                debug!("Message sent");
+            }
+            debug!("Tick - new message to client, expecting a message from server task");
+        }
+    });
+    debug!("Handle GRPC5");
+
+    let call_method = connectClient.bidirectional_streaming(
+        tonic::Request::new(message_rx)
+    ).await?;
+
+    debug!("Handle GRPC3");
+
+    if let mut methodStream = call_method.into_inner() {
+        debug!("Been able to call the method");
+        tokio::spawn(async move {
+
+
+
+            if let Some(message) = methodStream.message().await? {
+                debug!("Got a new message : [{:?}]", message);
+            }
+
+            Ok::<(), tonic::Status>(())
+        });
+    } else {
+        debug!("Cannot call method: because");
+    }
+    debug!("Handle GRPC4");
+
+    Ok(())
+    // Ok::<(), tonic::transport::Error>(())
+}
+
+
+fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
+    debug!("Creating backend peers [DEBUGGING PURPOSES]");
 
     let mut back_peers = vec![];
 
-    back_peers.push(BackPeer {
-        ip: "127.0.0.1".parse().unwrap(),
-        port: 7801,
+    back_peers.push(UpstreamPeerMetadata {
+        ip: "localhost".parse().unwrap(),
+        port: 4770,
     });
 
     back_peers
 }
 
+pub fn register_upstream_peers(mut runtime: PersistentMarkingLB) {
+    debug!("Registering upstream peers");
+    // TODO only for debugging purposes
+    let upstream_peer_metadata = get_upstream_peers();
+
+    for upstream_peer_metadata in upstream_peer_metadata {
+        let upstream_peer = create_upstream_peer(upstream_peer_metadata);
+        upstream_peer.start(runtime.tx);
+        runtime.add_upstream_peer(upstream_peer);
+    }
+    tokio::spawn(async {
+        debug!("fuck it");
+        if let Err(err) = handle_grcp().await {
+            error!("Error from GRPC : [{:?}]", err);
+        }
+    });
+
+}
+
 #[tokio::main]
 async fn main() {
-
+    pretty_env_logger::init();
 
     // upstream_peer::compile_protos();
 
-    // upstream_peer::
-
-    pretty_env_logger::init();
     debug!("Starting listener!");
-
-    get_back_peers();
-
     let mut runtime = PersistentMarkingLB::new();
 
     let addr = "127.0.0.1:7999";
@@ -120,6 +197,8 @@ async fn main() {
             }
         }
     };
+
+    register_upstream_peers(runtime.clone());
 
     info!("Server running");
     lb_server.await;

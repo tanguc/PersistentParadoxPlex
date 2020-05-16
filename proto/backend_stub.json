@@ -1,0 +1,18 @@
+{
+  "service": "BackendPeerService",
+  "method": "BidirectionalStreaming",
+  "input": {
+    "matches": {
+      "payload": ".*"
+    }
+  },
+  "output": {
+    "data": {
+      "header": {
+        "address": "182.3.12.4",
+        "time": "12:29:39"
+      },
+      "payload": "Stubbed response, from GRPC server"
+    }
+  }
+}

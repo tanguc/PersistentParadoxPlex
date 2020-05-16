@@ -2,21 +2,22 @@ syntax = "proto3";
 
 package backend;
 
+service BackendPeerService {
+  rpc bidirectionalStreaming (stream InputStreamRequest) returns (stream OutputStreamRequest) {}
+}
+
 message header {
   string address = 1;
   string time = 2;
 }
 
-message inputStreamRequest {
+message InputStreamRequest {
   header header = 1;
   string payload = 2;
 }
 
-message outputStreamRequest {
+message OutputStreamRequest {
   header header = 1;
   string payload = 2;
 }
 
-service BackendPeerService {
-  rpc bidirectionalStreaming(stream inputStreamRequest) returns (stream outputStreamRequest) {}
-}

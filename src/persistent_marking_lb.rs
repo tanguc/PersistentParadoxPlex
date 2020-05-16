@@ -1,4 +1,4 @@
-use crate::peer::{PeerMetadata, PeerTxChannel, SinkPeerHalve, StreamPeerHalve};
+use crate::peer::{PeerMetadata, PeerTxChannel, DownstreamPeerSinkHalve, DownstreamPeerStreamHalve};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -187,8 +187,8 @@ impl PersistentMarkingLB {
 
     pub async fn add_peer_halves(
         &mut self,
-        peer_sink_halve: &SinkPeerHalve,
-        peer_stream_halve: &StreamPeerHalve,
+        peer_sink_halve: &DownstreamPeerSinkHalve,
+        peer_stream_halve: &DownstreamPeerStreamHalve,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
