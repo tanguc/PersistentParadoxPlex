@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package backend;
+package upstream;
 
-service BackendPeerService {
+service UpstreamPeerService {
   rpc bidirectionalStreaming (stream InputStreamRequest) returns (stream OutputStreamRequest) {}
 }
 

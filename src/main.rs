@@ -8,14 +8,14 @@ extern crate uuid;
 
 pub mod upstream_peer;
 pub mod peer;
-pub mod persistent_marking_lb;
+pub mod runtime;
 pub mod utils;
 pub mod backend;
 use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves, UpstreamPeerHalve};
-use crate::persistent_marking_lb::PeerEvent;
+use crate::runtime::PeerEvent;
 use std::net::{SocketAddr};
 use futures::StreamExt;
-use persistent_marking_lb::Runtime;
+use runtime::Runtime;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{delay_for, Duration};
 
@@ -125,7 +125,7 @@ pub async fn register_upstream_peers(mut runtime: Runtime) {
 async fn main() {
     pretty_env_logger::init();
 
-    // upstream_peer::compile_protos();
+    upstream_peer::compile_protos();
 
     debug!("Starting listener!");
     let mut runtime = Runtime::new();

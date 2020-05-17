@@ -5,13 +5,10 @@ use futures::{StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
-use crate::persistent_marking_lb::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel};
+use crate::runtime::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel};
 use crate::UpstreamPeerMetadata;
 use crate::backend;
 use futures_util::TryFutureExt;
-
-pub trait FrontEndPeer {}
-pub trait BackEndPeer {}
 
 pub type PeerTxChannel = mpsc::Sender<PeerEvent<String>>;
 pub type PeerRxChannel = mpsc::Receiver<PeerEvent<String>>;
@@ -168,7 +165,7 @@ impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
         tokio::spawn(async {
 
             let mut connect_client =
-                backend::backend_peer_service_client::BackendPeerServiceClient::connect(
+                backend::backend_peer_service_client::UpstreamPeerServiceClient::connect(
                     format!("tcp://{}", self.stream_halve.metadata.socket_addr.to_string())
                 ).map_err(|err| {
                     debug!("Cannot connect to the GRPC server [{:?}]", err);
@@ -275,7 +272,7 @@ impl PeerHalve {
 
 #[cfg(test)]
 mod tests {
-    use crate::persistent_marking_lb::RuntimeEvent;
+    use crate::runtime::RuntimeEvent;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
     use tokio::time::{delay_for, Duration};

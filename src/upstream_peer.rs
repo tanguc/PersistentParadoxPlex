@@ -1,23 +1,23 @@
 use std::path::{PathBuf};
 use tokio;
-use backend_peer::backend_peer_service_server::BackendPeerService;
-use backend_peer::{
+use upstream_proto::upstream_peer_service_server::UpstreamPeerService;
+use upstream_proto::{
     InputStreamRequest,
     OutputStreamRequest
 };
 use futures_core::Stream;
 use std::pin::Pin;
-use crate::persistent_marking_lb::{RuntimeEvent, RuntimeOrderRxChannel, RuntimeOrderTxChannel};
+use crate::runtime::{RuntimeEvent, RuntimeOrderRxChannel, RuntimeOrderTxChannel};
 use crate::peer::{PeerTxChannel, PeerRxChannel};
 
 pub fn compile_protos() {
-    let path = PathBuf::from("proto/backend.proto");
+    let path = PathBuf::from("proto/upstream.proto");
     tonic_build::compile_protos(path).unwrap_or_else(|e| panic!("Failed to compile {:?}", e));
 }
 
-pub mod backend_peer {
+pub mod upstream_proto {
     // tonic::include_proto!("backendpeer");
-    include!("backend.rs");
+    include!("upstream_proto.rs");
 }
 
 pub struct UpstreamPeerServiceImpl {
@@ -29,8 +29,9 @@ pub struct UpstreamPeerServiceImpl {
 
 trace_macros!(false);
 
+/// DEBUGGING PURPOSES
 #[tonic::async_trait]
-impl BackendPeerService for UpstreamPeerServiceImpl {
+impl UpstreamPeerService for UpstreamPeerServiceImpl {
 
     type bidirectionalStreamingStream =
      Pin<Box<dyn Stream<Item = Result<OutputStreamRequest, tonic::Status>> + Send + Sync + 'static>>;

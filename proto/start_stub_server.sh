@@ -1,1 +1,1 @@
-docker run -p 4770:4770 -p 4771:4771 -v C:\Users\stanguc\Projects\PersistentMarkingLB\proto:/proto -v C:\Users\stanguc\Projects\PersistentMarkingLB\proto\backend_stub.json:/stub/backend.json  tkpd/gripmock --stub=/stub /proto/backend.proto
+docker run -p 4770:4770 -p 4771:4771 -v C:\Users\stanguc\Projects\PersistentMarkingLB\proto:/proto -v C:\Users\stanguc\Projects\PersistentMarkingLB\proto\upstream_stub.json:/stub/upstream.json  tkpd/gripmock --stub=/stub /proto/upstream.proto
