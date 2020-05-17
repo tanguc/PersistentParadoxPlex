@@ -1,21 +1,5 @@
-use std::path::{Path, PathBuf};
-
-pub fn compile_protos() {
-    let path = PathBuf::from("proto/backend.proto");
-    tonic_build::compile_protos(path).unwrap_or_else(|e| panic!("Failed to compile {:?}", e));
-}
-
-
-
-use tonic::transport::Server;
-
+use std::path::{PathBuf};
 use tokio;
-
-pub mod backend_peer {
-    // tonic::include_proto!("backendpeer");
-    include!("backend.rs");
-}
-
 use backend_peer::backend_peer_service_server::BackendPeerService;
 use backend_peer::{
     InputStreamRequest,
@@ -23,29 +7,30 @@ use backend_peer::{
 };
 use futures_core::Stream;
 use std::pin::Pin;
-use crate::upstream_peer::backend_peer::backend_peer_service_server::BackendPeerServiceServer;
-use tonic::{Response, Status};
-use futures::future::err;
-use crate::persistent_marking_lb::{RuntimeOrder, InnerExchange, RuntimeOrderRxChannel, RuntimeOrderTxChannel};
+use crate::persistent_marking_lb::{RuntimeEvent, RuntimeOrderRxChannel, RuntimeOrderTxChannel};
 use crate::peer::{PeerTxChannel, PeerRxChannel};
-use std::future::Future;
 
+pub fn compile_protos() {
+    let path = PathBuf::from("proto/backend.proto");
+    tonic_build::compile_protos(path).unwrap_or_else(|e| panic!("Failed to compile {:?}", e));
+}
 
-// #[derive(Debug)]
-// pub struct BackendPeer;
+pub mod backend_peer {
+    // tonic::include_proto!("backendpeer");
+    include!("backend.rs");
+}
 
-pub struct BackendPeerServiceImpl {
+pub struct UpstreamPeerServiceImpl {
     rt_tx: RuntimeOrderTxChannel, // to send messages to downstream (frontend peeers)
     rt_rx: RuntimeOrderRxChannel, // to receive stop order (close connection with backeend peer)...
     backend_peer_tx: PeerTxChannel, // channel to use on runtime to send a new message to upstream (backend peer)
     backend_peer_rx: PeerRxChannel, // channel to receive message to sink
 }
 
-trace_macros!(true);
-
+trace_macros!(false);
 
 #[tonic::async_trait]
-impl BackendPeerService for BackendPeerServiceImpl {
+impl BackendPeerService for UpstreamPeerServiceImpl {
 
     type bidirectionalStreamingStream =
      Pin<Box<dyn Stream<Item = Result<OutputStreamRequest, tonic::Status>> + Send + Sync + 'static>>;
@@ -54,12 +39,6 @@ impl BackendPeerService for BackendPeerServiceImpl {
         &self,
         mut request: tonic::Request<tonic::Streaming<InputStreamRequest>>
     ) -> Result<tonic::Response<Self::bidirectionalStreamingStream>, tonic::Status> {
-
-
-        // let  request_streaming= request.get_mut();
-        // lets consider these are upstreams peers (raw tcp)
-        // let (mut _upstream_tx, mut frontend_peer_rx) = tokio::sync::mpsc::channel(4);
-
         let mut rt_tx = self.rt_tx.clone();
         tokio::spawn(async move {
             debug!("starting streaming responses to downstream peer");
@@ -81,7 +60,7 @@ impl BackendPeerService for BackendPeerServiceImpl {
 
                 // notify the runtime we got a new message to pass it though frontend peers
                 if let Err(_) = rt_tx.send(
-                    RuntimeOrder::GotMessageFromUpstreamPeer(
+                    RuntimeEvent::GotMessageFromUpstreamPeer(
                         backend_peer_message.payload)).await {
                     error!("cannot send received message to frontend peer");
                 }
@@ -103,13 +82,13 @@ impl BackendPeerService for BackendPeerServiceImpl {
             loop {
                 if let Some(rcv_order) = rt_rx.recv().await {
                     match rcv_order {
-                        RuntimeOrder::GotMessageFromDownstream(str) => {
+                        RuntimeEvent::GotMessageFromDownstream(str) => {
                             yield OutputStreamRequest {
                                 header: Option::None,
                                 payload: str
                             };
                         },
-                        RuntimeOrder::ShutdownPeer => {
+                        RuntimeEvent::ShutdownPeer => {
                             info!("Closing the upstream backend peer");
                             break;
                         },

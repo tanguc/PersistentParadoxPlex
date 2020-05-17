@@ -6,30 +6,21 @@ extern crate tokio_util;
 extern crate log;
 extern crate uuid;
 
-use std::net::{Ipv4Addr, SocketAddr, IpAddr};
-
 pub mod upstream_peer;
 pub mod peer;
 pub mod persistent_marking_lb;
 pub mod utils;
 pub mod backend;
-
 use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves, UpstreamPeerHalve};
-
-use crate::persistent_marking_lb::InnerExchange;
+use crate::persistent_marking_lb::PeerEvent;
+use std::net::{SocketAddr};
 use futures::StreamExt;
-use persistent_marking_lb::PersistentMarkingLB;
-
+use persistent_marking_lb::Runtime;
 use tokio::net::{TcpListener, TcpStream};
-
 use tokio::time::{delay_for, Duration};
-use crate::peer::PeerError::SocketAddrNotFound;
-use std::str::FromStr;
-use std::convert::TryInto;
-use futures::channel::mpsc::UnboundedSender;
 
 async fn dummy_task_for_writing(
-    mut peer_sink_tx_channel: tokio::sync::mpsc::Sender<InnerExchange<String>>,
+    mut peer_sink_tx_channel: tokio::sync::mpsc::Sender<PeerEvent<String>>,
 ) {
     info!("Starting the dummy data exchanger (to the sink peer)");
 
@@ -38,14 +29,14 @@ async fn dummy_task_for_writing(
         delay_for(Duration::from_secs(2)).await;
         let dummy_message = format!("DUMMY ANSWER {}", i);
         let res = peer_sink_tx_channel
-            .send(InnerExchange::Write(dummy_message))
+            .send(PeerEvent::Write(dummy_message))
             .await;
         debug!("Sent message from dummy, res : {:?}", res);
         i = i + 1;
     }
 }
 
-async fn handle_new_client(runtime: &mut PersistentMarkingLB, tcp_stream: TcpStream) {
+async fn handle_new_client(runtime: &mut Runtime, tcp_stream: TcpStream) {
     info!("New client connected");
 
     match tcp_stream.peer_addr() {
@@ -73,66 +64,8 @@ pub struct UpstreamPeerMetadata {
 }
 
 pub enum UpstreamPeerMetadataError {
-    HOST_INVALID
+    HostInvalid
 }
-
-// impl std::convert::TryInto<std::net::SocketAddr> for UpstreamPeerMetadata {
-//     type Error = UpstreamPeerMetadataError;
-//
-//     fn try_into(self) -> Result<std::net::SocketAddr, Self::Error> {
-//         SocketAddr::from_str(format!("{}:{}", self.ip, self.port).as_ref())
-//             .map_err(|err| {
-//                 error!("Could not parse the upstream host: [{:?}]", err);
-//                 UpstreamPeerMetadataError::HOST_INVALID
-//             })
-//     }
-// }
-
-// impl std::convert::TryFrom<>
-
-async fn handle_grcp() -> Result<(), Box<dyn std::error::Error>> {
-    debug!("Handle GRPC");
-    let mut connectClient =
-        backend::backend_peer_service_client::BackendPeerServiceClient::connect(
-            "tcp://:4770"
-        ).await?;
-    debug!("Handle GRPC1");
-
-    let (mut message_tx, message_rx) =
-        tokio::sync::mpsc::unbounded_channel::<backend::InputStreamRequest>();
-
-    debug!("Handle GRPC2");
-
-
-    debug!("Handle GRPC5");
-
-    let call_method = connectClient.bidirectional_streaming(
-        tonic::Request::new(message_rx)
-    ).await?;
-
-    debug!("Handle GRPC3");
-
-    if let mut methodStream = call_method.into_inner() {
-        debug!("Been able to call the method");
-        tokio::spawn(async move {
-
-
-
-            if let Some(message) = methodStream.message().await? {
-                debug!("Got a new message : [{:?}]", message);
-            }
-
-            Ok::<(), tonic::Status>(())
-        });
-    } else {
-        debug!("Cannot call method: because");
-    }
-    debug!("Handle GRPC4");
-
-    Ok(())
-    // Ok::<(), tonic::transport::Error>(())
-}
-
 
 fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     debug!("Creating backend peers [DEBUGGING PURPOSES]");
@@ -148,7 +81,7 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     back_peers
 }
 
-pub fn register_upstream_peers(mut runtime: PersistentMarkingLB) {
+pub async fn register_upstream_peers(mut runtime: Runtime) {
     debug!("Registering upstream peers");
     // TODO only for debugging purposes
     let upstream_peer_metadata = get_upstream_peers();
@@ -167,7 +100,7 @@ pub fn register_upstream_peers(mut runtime: PersistentMarkingLB) {
                 let mut interval = tokio::time::interval(Duration::from_secs(20));
                 loop {
                     interval.tick().await;
-                    let mut body = backend::InputStreamRequest {
+                    let body = backend::InputStreamRequest {
                         header: Option::Some(backend::Header {
                             address: "823.12938I.3291833.".to_string(),
                             time: "12:32:12".to_string()
@@ -183,7 +116,7 @@ pub fn register_upstream_peers(mut runtime: PersistentMarkingLB) {
                 }
             });
         }
-        runtime.add_upstream_peer_halves(&upstream_peer);
+        runtime.add_upstream_peer_halves(&upstream_peer).await;
         upstream_peer.start();
     }
 }
@@ -195,8 +128,8 @@ async fn main() {
     // upstream_peer::compile_protos();
 
     debug!("Starting listener!");
-    let mut runtime = PersistentMarkingLB::new();
-    register_upstream_peers(runtime.clone());
+    let mut runtime = Runtime::new();
+    register_upstream_peers(runtime.clone()).await;
 
     let addr = "127.0.0.1:7999";
 

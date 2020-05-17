@@ -1,4 +1,11 @@
-use crate::peer::{PeerMetadata, PeerTxChannel, DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, UpstreamPeerHalve};
+use crate::peer::{
+    PeerMetadata,
+    PeerTxChannel,
+    DownstreamPeerSinkHalve,
+    DownstreamPeerStreamHalve,
+    UpstreamPeerHalve
+};
+use crate::backend;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -9,16 +16,24 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, watch};
 use uuid::Uuid;
 
+pub type PersistentMarkingLBRuntime = Arc<Mutex<Runtime>>;
+
+/// Channel to send/receive runtime orders
+pub type RuntimeOrderTxChannel = mpsc::Sender<RuntimeEvent>;
+pub type RuntimeOrderRxChannel = watch::Receiver<RuntimeEvent>;
+
+type RuntimeResult<T> = Result<T, RuntimeError>;
+
 #[derive(Clone, Debug, PartialEq)]
-pub enum InnerExchange<T> {
+pub enum PeerEvent<T> {
     Start,
     Pause,
-    Write(T),
-    FromRuntime(RuntimeOrder),
+    Stop,
+    Write(T)
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum RuntimeOrder {
+pub enum RuntimeEvent {
     NoOrder,
     ShutdownPeer,
     PausePeer,
@@ -27,14 +42,8 @@ pub enum RuntimeOrder {
     PeerTerminatedConnection(PeerMetadata),
 }
 
-pub type PersistentMarkingLBRuntime = Arc<Mutex<PersistentMarkingLB>>;
-pub type RuntimeOrderTxChannel = mpsc::Sender<RuntimeOrder>;
-pub type RuntimeOrderRxChannel = watch::Receiver<RuntimeOrder>;
-
-use crate::backend;
-
 #[derive(Debug)]
-pub struct PersistentMarkingPeersPool {
+pub struct RuntimePeersPool {
     // Used only for runtime orders
     pub downstream_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
     pub upstream_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
@@ -43,17 +52,13 @@ pub struct PersistentMarkingPeersPool {
     pub downstream_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
     pub upstream_peers_sink_tx: HashMap<Uuid, mpsc::UnboundedSender<backend::InputStreamRequest>>,
 
-    pub peers_socket_addr_uuids: HashMap<SocketAddr, Uuid>,
+    pub peers_addr_uuids: HashMap<SocketAddr, Uuid>,
 }
 
 #[derive(Clone)]
-pub struct PersistentMarkingLB {
+pub struct Runtime {
     pub tx: RuntimeOrderTxChannel,
-    pub peers_pool: Arc<Mutex<PersistentMarkingPeersPool>>,
-}
-
-pub enum PersistentMarkingLBError {
-    CannotHandleClient,
+    pub peers_pool: Arc<Mutex<RuntimePeersPool>>,
 }
 
 enum RuntimeError {
@@ -62,20 +67,18 @@ enum RuntimeError {
     PeerChannelCommunicationError(PeerMetadata),
 }
 
-type RuntimeResult<T> = Result<T, RuntimeError>;
-
-impl PersistentMarkingLB {
-    pub fn new() -> PersistentMarkingLB {
+impl Runtime {
+    pub fn new() -> Runtime {
         let (tx, rx) =
-            mpsc::channel::<RuntimeOrder>(1000);
-        let runtime = PersistentMarkingLB {
+            mpsc::channel::<RuntimeEvent>(1000);
+        let runtime = Runtime {
             tx,
-            peers_pool: Arc::new(Mutex::new(PersistentMarkingPeersPool {
+            peers_pool: Arc::new(Mutex::new(RuntimePeersPool {
                 downstream_peers_stream_tx: HashMap::new(),
                 downstream_peers_sink_tx: HashMap::new(),
                 upstream_peers_stream_tx: HashMap::new(),
                 upstream_peers_sink_tx: HashMap::new(),
-                peers_socket_addr_uuids: HashMap::new(),
+                peers_addr_uuids: HashMap::new(),
             })),
         };
         runtime.clone().start(rx);
@@ -83,23 +86,23 @@ impl PersistentMarkingLB {
         runtime
     }
 
-    fn start(mut self, mut rx: mpsc::Receiver<RuntimeOrder>) {
+    fn start(mut self, mut rx: mpsc::Receiver<RuntimeEvent>) {
         let runtime_task = async move {
             debug!("Starting runtime of PersistentMarkingLB");
             match rx.recv().await {
-                Some(runtime_order) => {
+                Some(runtime_event) => {
                     info!("Got order from a client");
-                    match runtime_order {
-                        RuntimeOrder::NoOrder => {
+                    match runtime_event {
+                        RuntimeEvent::NoOrder => {
                             debug!("NoOrder");
                         }
-                        RuntimeOrder::ShutdownPeer => {
-                            debug!("Peer have been shutdown");
+                        RuntimeEvent::ShutdownPeer => {
+                            debug!("Peer shutdown");
                         }
-                        RuntimeOrder::PausePeer => {
+                        RuntimeEvent::PausePeer => {
                             debug!("Peer paused");
                         }
-                        RuntimeOrder::PeerTerminatedConnection(peer_metadata) => {
+                        RuntimeEvent::PeerTerminatedConnection(peer_metadata) => {
                             {
                                 let scope_lock = self.peers_pool.lock().await;
                                 debug!(
@@ -113,10 +116,10 @@ impl PersistentMarkingLB {
                             }
                             self.handle_peer_termination(peer_metadata).await;
                         }
-                        RuntimeOrder::GotMessageFromUpstreamPeer(_) => {
+                        RuntimeEvent::GotMessageFromUpstreamPeer(_) => {
                             debug!("GotMessageFromUpstreamPeer")
                         }
-                        RuntimeOrder::GotMessageFromDownstream(_) => {
+                        RuntimeEvent::GotMessageFromDownstream(_) => {
                             debug!("GotMessageFromDownstream")
                         }
                     }
@@ -168,15 +171,18 @@ impl PersistentMarkingLB {
         }
     }
 
+    /// When a peer is down (notified from stream halve usually)
+    /// Notifying the sink halve to stop right now his runtime
     async fn handle_peer_termination(&mut self, peer_metadata: PeerMetadata) -> RuntimeResult<()> {
         debug!("Handle peer terminated connection");
 
-        let (peer_sink_tx, _) = self.remove_front_peer(peer_metadata.clone()).await?;
+        let (peer_sink_tx, _) =
+            self.remove_front_peer(peer_metadata.clone()).await?;
         let mut peer_sink_tx =
             peer_sink_tx.ok_or(RuntimeError::PeerHalveDown(peer_metadata.clone()))?;
 
         peer_sink_tx
-            .send(InnerExchange::FromRuntime(RuntimeOrder::ShutdownPeer))
+            .send(PeerEvent::Stop)
             .await
             .map_err(|_| {
                 error!(
@@ -204,7 +210,7 @@ impl PersistentMarkingLB {
             peer_halve.grpc_tx_channel.clone()
         );
 
-        locked_peers_pool.peers_socket_addr_uuids.insert(
+        locked_peers_pool.peers_addr_uuids.insert(
             peer_halve.stream_halve.metadata.socket_addr.clone(),
             peer_halve.stream_halve.metadata.uuid
         );
@@ -225,7 +231,7 @@ impl PersistentMarkingLB {
             peer_sink_halve.halve.metadata.uuid,
             peer_sink_halve.halve.tx.clone(),
         );
-        locked_peers_pool.peers_socket_addr_uuids.insert(
+        locked_peers_pool.peers_addr_uuids.insert(
             peer_sink_halve.halve.metadata.socket_addr,
             peer_sink_halve.halve.metadata.uuid,
         );

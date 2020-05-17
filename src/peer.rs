@@ -1,25 +1,20 @@
 use std::fmt::{Debug, Display, Error, Formatter};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
-
-use futures::{StreamExt, Stream};
-
+use futures::{StreamExt};
 use tokio::sync::mpsc;
-
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
-use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder, RuntimeOrderTxChannel};
+use crate::persistent_marking_lb::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel};
 use crate::UpstreamPeerMetadata;
 use crate::backend;
-use std::convert::TryInto;
-use crate::upstream_peer::backend_peer::InputStreamRequest;
 use futures_util::TryFutureExt;
 
 pub trait FrontEndPeer {}
 pub trait BackEndPeer {}
 
-pub type PeerTxChannel = mpsc::Sender<InnerExchange<String>>;
-pub type PeerRxChannel = mpsc::Receiver<InnerExchange<String>>;
+pub type PeerTxChannel = mpsc::Sender<PeerEvent<String>>;
+pub type PeerRxChannel = mpsc::Receiver<PeerEvent<String>>;
 
 #[derive(Clone, PartialEq)]
 pub struct PeerMetadata {
@@ -94,11 +89,11 @@ pub fn create_upstream_halves<T>(
     let stream_halve =
         PeerHalve::new(uuid, runtime_tx.clone(), metadata.host);
 
-    let (mut message_tx, message_rx) =
+    let (message_tx, message_rx) =
         tokio::sync::mpsc::unbounded_channel::<T>();
 
     UpstreamPeerHalve {
-        stream_halve: stream_halve,
+        stream_halve,
         grpc_tx_channel: message_tx,
         grpc_rx_channel: message_rx
     }
@@ -149,7 +144,7 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
                         if let Err(err) = self
                             .halve
                             .runtime_tx
-                            .send(RuntimeOrder::PeerTerminatedConnection(self.halve.metadata))
+                            .send(RuntimeEvent::PeerTerminatedConnection(self.halve.metadata))
                             .await
                         {
                             error!(
@@ -168,26 +163,26 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
 }
 
 impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
-    fn start(mut self) {
+    fn start(self) {
         debug!("Starting upstream stream halve");
         tokio::spawn(async {
 
-            let mut connectClient =
+            let mut connect_client =
                 backend::backend_peer_service_client::BackendPeerServiceClient::connect(
-                    "tcp://:4770"
+                    format!("tcp://{}", self.stream_halve.metadata.socket_addr.to_string())
                 ).map_err(|err| {
                     debug!("Cannot connect to the GRPC server [{:?}]", err);
                     tonic::Status::aborted("Cannot connect to the GRPC server")
                 }).await?;
 
             let call_method =
-                connectClient.bidirectional_streaming(
+                connect_client.bidirectional_streaming(
                     tonic::Request::new(self.grpc_rx_channel)).await?;
 
-            if let mut methodStream = call_method.into_inner() {
+            if let mut method_stream = call_method.into_inner() {
                 debug!("Been able to call the method");
 
-                if let Some(message) = methodStream.message().await? {
+                if let Some(message) = method_stream.message().await? {
                     debug!("Got a new message : [{:?}]", message);
                 }
 
@@ -213,18 +208,19 @@ impl PeerHalveRuntime for DownstreamPeerSinkHalve {
                 if let Some(sink_order) = self.halve.rx.recv().await {
                     info!("Got order from another task to sink");
                     match sink_order {
-                        InnerExchange::Start => {
+                        PeerEvent::Start => {
                             info!("Starting the writing");
                         }
-                        InnerExchange::Pause => {
+                        PeerEvent::Pause => {
                             info!("Pause the writing");
                         }
-                        InnerExchange::Write(_payload) => {
+                        PeerEvent::Write(_payload) => {
                             info!("WRITING PAYLOADDDD");
                             // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
-                        }
-                        InnerExchange::FromRuntime(runtime_order) => {
-                            info!("Got an order from runtime : {:?}", runtime_order);
+                        },
+                        PeerEvent::Stop => {
+                            info!("Stopping peer sink");
+                            break;
                         }
                     }
                 } else {
@@ -267,7 +263,7 @@ impl DownstreamPeerStreamHalve {
 impl PeerHalve {
     pub fn new(uuid: Uuid, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
         let (tx, rx) =
-            mpsc::channel::<InnerExchange<String>>(1000);
+            mpsc::channel::<PeerEvent<String>>(1000);
         PeerHalve {
             metadata: PeerMetadata { uuid, socket_addr },
             runtime_tx,
@@ -279,7 +275,7 @@ impl PeerHalve {
 
 #[cfg(test)]
 mod tests {
-    use crate::persistent_marking_lb::RuntimeOrder;
+    use crate::persistent_marking_lb::RuntimeEvent;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
     use tokio::time::{delay_for, Duration};
@@ -295,7 +291,7 @@ mod tests {
         tokio::task::spawn(mock_tcp_client_task);
         let (tcp_socket, socket_addr) = tcp_listener.await.unwrap().accept().await.unwrap();
         debug!("Client connected");
-        let (runtime_tx, _) = mpsc::channel::<RuntimeOrder>(1);
+        let (runtime_tx, _) = mpsc::channel::<RuntimeEvent>(1);
 
         let peer_halves = super::create_peer_halves(tcp_socket, socket_addr, runtime_tx);
         assert_eq!(
