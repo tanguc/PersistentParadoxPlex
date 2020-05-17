@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display, Error, Formatter};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
-use futures::StreamExt;
+use futures::{StreamExt, Stream};
 
 use tokio::sync::mpsc;
 
@@ -11,6 +11,9 @@ use uuid::Uuid;
 use crate::persistent_marking_lb::{InnerExchange, RuntimeOrder, RuntimeOrderTxChannel};
 use crate::UpstreamPeerMetadata;
 use crate::backend;
+use std::convert::TryInto;
+use crate::upstream_peer::backend_peer::InputStreamRequest;
+use futures_util::TryFutureExt;
 
 pub trait FrontEndPeer {}
 pub trait BackEndPeer {}
@@ -61,9 +64,15 @@ pub struct DownstreamPeerSinkHalve {
     pub tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
 }
 
-pub struct UpstreamPeerStreamHalve<T> {
-    pub halve: PeerHalve,
-    pub grpc_tx_channel: tokio::sync::mpsc::UnboundedSender<T>
+/// Only stream runtime is stored
+/// The sink is only a simple channel and his runtime
+/// is created by the GRPC runtime
+pub struct UpstreamPeerHalve<T> {
+    pub stream_halve: PeerHalve,
+    // to write data to the client
+    pub grpc_tx_channel: tokio::sync::mpsc::UnboundedSender<T>,
+    // not available for us (passed to tonic)
+    pub grpc_rx_channel: tokio::sync::mpsc::UnboundedReceiver<T>
 }
 
 pub enum PeerError {
@@ -78,19 +87,20 @@ pub enum PeerError {
 pub fn create_upstream_halves<T>(
     metadata: UpstreamPeerMetadata,
     runtime_tx: RuntimeOrderTxChannel,
-) -> UpstreamPeerStreamHalve<T> {
+) -> UpstreamPeerHalve<T> {
     debug!("Creating upstream peer halves");
     let uuid = Uuid::new_v4();
 
     let stream_halve =
-        PeerHalve::new(uuid, runtime_tx.clone(), metadata.into());
+        PeerHalve::new(uuid, runtime_tx.clone(), metadata.host);
 
     let (mut message_tx, message_rx) =
         tokio::sync::mpsc::unbounded_channel::<T>();
 
-    UpstreamPeerStreamHalve {
-        halve: stream_halve,
-        grpc_tx_channel: message_tx
+    UpstreamPeerHalve {
+        stream_halve: stream_halve,
+        grpc_tx_channel: message_tx,
+        grpc_rx_channel: message_rx
     }
 }
 
@@ -157,7 +167,7 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
     }
 }
 
-impl PeerHalveRuntime<T> for UpstreamPeerStreamHalve<T> {
+impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
     fn start(mut self) {
         debug!("Starting upstream stream halve");
         tokio::spawn(async {
@@ -165,12 +175,14 @@ impl PeerHalveRuntime<T> for UpstreamPeerStreamHalve<T> {
             let mut connectClient =
                 backend::backend_peer_service_client::BackendPeerServiceClient::connect(
                     "tcp://:4770"
-                ).await?;
+                ).map_err(|err| {
+                    debug!("Cannot connect to the GRPC server [{:?}]", err);
+                    tonic::Status::aborted("Cannot connect to the GRPC server")
+                }).await?;
 
-
-            let call_method = connectClient.bidirectional_streaming(
-                tonic::Request::new(self.message_rx)
-            ).await?;
+            let call_method =
+                connectClient.bidirectional_streaming(
+                    tonic::Request::new(self.grpc_rx_channel)).await?;
 
             if let mut methodStream = call_method.into_inner() {
                 debug!("Been able to call the method");
@@ -184,7 +196,7 @@ impl PeerHalveRuntime<T> for UpstreamPeerStreamHalve<T> {
             }
             debug!("Handle GRPC4");
 
-            Ok::<(), Box<dyn std::error::Error>>(())
+            Ok::<(), tonic::Status>(())
         });
     }
 }

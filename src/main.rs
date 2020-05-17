@@ -6,7 +6,7 @@ extern crate tokio_util;
 extern crate log;
 extern crate uuid;
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr, IpAddr};
 
 pub mod upstream_peer;
 pub mod peer;
@@ -14,7 +14,7 @@ pub mod persistent_marking_lb;
 pub mod utils;
 pub mod backend;
 
-use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves};
+use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves, UpstreamPeerHalve};
 
 use crate::persistent_marking_lb::InnerExchange;
 use futures::StreamExt;
@@ -23,7 +23,10 @@ use persistent_marking_lb::PersistentMarkingLB;
 use tokio::net::{TcpListener, TcpStream};
 
 use tokio::time::{delay_for, Duration};
-use crate::upstream_peer::backend_peer::InputStreamRequest;
+use crate::peer::PeerError::SocketAddrNotFound;
+use std::str::FromStr;
+use std::convert::TryInto;
+use futures::channel::mpsc::UnboundedSender;
 
 async fn dummy_task_for_writing(
     mut peer_sink_tx_channel: tokio::sync::mpsc::Sender<InnerExchange<String>>,
@@ -51,7 +54,7 @@ async fn handle_new_client(runtime: &mut PersistentMarkingLB, tcp_stream: TcpStr
             let (peer_sink, peer_stream) =
                 create_peer_halves(tcp_stream, peer_addr, runtime.tx.clone());
 
-            runtime.add_peer_halves(&peer_sink, &peer_stream).await;
+            runtime.add_downstream_peer_halves(&peer_sink, &peer_stream).await;
 
             //debug purposes
             tokio::spawn(dummy_task_for_writing(peer_sink.halve.tx.clone()));
@@ -66,9 +69,26 @@ async fn handle_new_client(runtime: &mut PersistentMarkingLB, tcp_stream: TcpStr
 }
 
 pub struct UpstreamPeerMetadata {
-    pub ip: Ipv4Addr,
-    pub port: u16,
+    pub host: SocketAddr
 }
+
+pub enum UpstreamPeerMetadataError {
+    HOST_INVALID
+}
+
+// impl std::convert::TryInto<std::net::SocketAddr> for UpstreamPeerMetadata {
+//     type Error = UpstreamPeerMetadataError;
+//
+//     fn try_into(self) -> Result<std::net::SocketAddr, Self::Error> {
+//         SocketAddr::from_str(format!("{}:{}", self.ip, self.port).as_ref())
+//             .map_err(|err| {
+//                 error!("Could not parse the upstream host: [{:?}]", err);
+//                 UpstreamPeerMetadataError::HOST_INVALID
+//             })
+//     }
+// }
+
+// impl std::convert::TryFrom<>
 
 async fn handle_grcp() -> Result<(), Box<dyn std::error::Error>> {
     debug!("Handle GRPC");
@@ -83,25 +103,7 @@ async fn handle_grcp() -> Result<(), Box<dyn std::error::Error>> {
 
     debug!("Handle GRPC2");
 
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-            let mut body = backend::InputStreamRequest {
-                header: Option::Some(backend::Header {
-                    address: "823.12938I.3291833.".to_string(),
-                    time: "12:32:12".to_string()
-                }),
-                payload: "Task spawn - client send fake data".to_string()
-            };
-            if let Err(err) = message_tx.send(body) {
-                debug!("Cannot send message from client (spawn task): [{:?}]", err);
-            } else {
-                debug!("Message sent");
-            }
-            debug!("Tick - new message to client, expecting a message from server task");
-        }
-    });
+
     debug!("Handle GRPC5");
 
     let call_method = connectClient.bidirectional_streaming(
@@ -138,8 +140,9 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     let mut back_peers = vec![];
 
     back_peers.push(UpstreamPeerMetadata {
-        ip: "localhost".parse().unwrap(),
-        port: 4770,
+        host: "127.0.0.1:4770".parse().map_err(|err| {
+            error!("Could not parse addr: [{:?}]", err);
+        }).unwrap(),
     });
 
     back_peers
@@ -151,20 +154,38 @@ pub fn register_upstream_peers(mut runtime: PersistentMarkingLB) {
     let upstream_peer_metadata = get_upstream_peers();
 
     for upstream_peer_metadata in upstream_peer_metadata {
-        let upstream_peer = create_upstream_halves(
-            upstream_peer_metadata,
-            runtime.tx.clone()
-        );
-        upstream_peer.start();
-        // runtime.add_upstream_peer(upstream_peer);
-    }
-    // tokio::spawn(async {
-    //     debug!("fuck it");
-    //     if let Err(err) = handle_grcp().await {
-    //         error!("Error from GRPC : [{:?}]", err);
-    //     }
-    // });
+        let upstream_peer: UpstreamPeerHalve<backend::InputStreamRequest> =
+            create_upstream_halves(
+                upstream_peer_metadata, runtime.tx.clone()
+            );
 
+        // debugging purposes
+        {
+            let upstream_stream_tx =
+                upstream_peer.grpc_tx_channel.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(20));
+                loop {
+                    interval.tick().await;
+                    let mut body = backend::InputStreamRequest {
+                        header: Option::Some(backend::Header {
+                            address: "823.12938I.3291833.".to_string(),
+                            time: "12:32:12".to_string()
+                        }),
+                        payload: "Task spawn - client send fake data".to_string()
+                    };
+                    if let Err(err) = upstream_stream_tx.send(body) {
+                        debug!("Cannot send message from client (spawn task): [{:?}]", err);
+                    } else {
+                        debug!("Message sent");
+                    }
+                    debug!("Tick - new message to client, expecting a message from server task");
+                }
+            });
+        }
+        runtime.add_upstream_peer_halves(&upstream_peer);
+        upstream_peer.start();
+    }
 }
 
 #[tokio::main]
@@ -175,6 +196,7 @@ async fn main() {
 
     debug!("Starting listener!");
     let mut runtime = PersistentMarkingLB::new();
+    register_upstream_peers(runtime.clone());
 
     let addr = "127.0.0.1:7999";
 
@@ -200,8 +222,6 @@ async fn main() {
             }
         }
     };
-
-    register_upstream_peers(runtime.clone());
 
     info!("Server running");
     lb_server.await;
