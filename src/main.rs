@@ -11,13 +11,14 @@ pub mod peer;
 pub mod runtime;
 pub mod utils;
 pub mod backend;
-use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves, UpstreamPeerHalve};
+use crate::peer::{create_peer_halves, PeerHalveRuntime, create_upstream_halves, UpstreamPeerHalve, PeerError};
 use crate::runtime::PeerEvent;
 use std::net::{SocketAddr};
 use futures::StreamExt;
 use runtime::Runtime;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{delay_for, Duration};
+use tokio::task::JoinHandle;
 
 async fn dummy_task_for_writing(
     mut peer_sink_tx_channel: tokio::sync::mpsc::Sender<PeerEvent<String>>,
@@ -50,8 +51,8 @@ async fn handle_new_client(runtime: &mut Runtime, tcp_stream: TcpStream) {
             //debug purposes
             tokio::spawn(dummy_task_for_writing(peer_sink.halve.tx.clone()));
 
-            peer_sink.start();
-            peer_stream.start();
+            let peer_sink_handle = peer_sink.start();
+            let peer_stream_handle = peer_stream.start();
         }
         Err(_err) => {
             error!("Not able to retrieve client socket address");
@@ -91,15 +92,17 @@ pub async fn register_upstream_peers(mut runtime: Runtime) {
             create_upstream_halves(
                 upstream_peer_metadata, runtime.tx.clone()
             );
+        let upstream_stream_tx =
+            upstream_peer.grpc_tx_channel.clone();
 
-        // debugging purposes
+        runtime.add_upstream_peer_halves(&upstream_peer).await;
+        upstream_peer.start();
         {
-            let upstream_stream_tx =
-                upstream_peer.grpc_tx_channel.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(20));
                 loop {
                     interval.tick().await;
+                    debug!("Send a debug client request");
                     let body = backend::InputStreamRequest {
                         header: Option::Some(backend::Header {
                             address: "823.12938I.3291833.".to_string(),
@@ -108,7 +111,9 @@ pub async fn register_upstream_peers(mut runtime: Runtime) {
                         payload: "Task spawn - client send fake data".to_string()
                     };
                     if let Err(err) = upstream_stream_tx.send(body) {
-                        debug!("Cannot send message from client (spawn task): [{:?}]", err);
+                        error!("Cannot send message from client (spawn task): [{:?}]", err);
+                        error!("Looks like the halve channel has closed or dropped, aborting the task");
+                        return;
                     } else {
                         debug!("Message sent");
                     }
@@ -116,8 +121,6 @@ pub async fn register_upstream_peers(mut runtime: Runtime) {
                 }
             });
         }
-        runtime.add_upstream_peer_halves(&upstream_peer).await;
-        upstream_peer.start();
     }
 }
 
@@ -125,7 +128,7 @@ pub async fn register_upstream_peers(mut runtime: Runtime) {
 async fn main() {
     pretty_env_logger::init();
 
-    upstream_peer::compile_protos();
+    // upstream_peer::compile_protos();
 
     debug!("Starting listener!");
     let mut runtime = Runtime::new();

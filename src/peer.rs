@@ -9,6 +9,9 @@ use crate::runtime::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel};
 use crate::UpstreamPeerMetadata;
 use crate::backend;
 use futures_util::TryFutureExt;
+use tokio::task::JoinHandle;
+use std::any::Any;
+use std::fmt;
 
 pub type PeerTxChannel = mpsc::Sender<PeerEvent<String>>;
 pub type PeerRxChannel = mpsc::Receiver<PeerEvent<String>>;
@@ -67,8 +70,38 @@ pub struct UpstreamPeerHalve<T> {
     pub grpc_rx_channel: tokio::sync::mpsc::UnboundedReceiver<T>
 }
 
+impl std::fmt::Display for PeerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Peer got a broken pipe")
+    }
+}
+
+impl std::fmt::Debug for PeerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Peer got a broken pipe")
+    }
+}
+
+impl std::convert::From<tonic::Status> for Box<PeerError> {
+    fn from(status: tonic::Status) -> Self {
+        Box::new(PeerError::BrokenPipe)
+    }
+}
+
+impl std::error::Error for PeerError {
+    fn description(&self) -> &str {
+        "Peer got a broken pipe"
+    }
+
+    fn cause(&self) -> Option<&(dyn std::error::Error)> {
+        None
+    }
+}
+
 pub enum PeerError {
     SocketAddrNotFound,
+    BrokenPipe,
+    ServerClosed
 }
 
 /// Create stream halve for upstream peers (GRPC)
@@ -116,12 +149,15 @@ pub fn create_peer_halves(
     (peer_sink, peer_stream)
 }
 
+
+type BoxError = Result::<(), Box<PeerError>>;
+
 pub trait PeerHalveRuntime {
-    fn start(self);
+    fn start(self) -> JoinHandle<BoxError>;
 }
 
 impl PeerHalveRuntime for DownstreamPeerStreamHalve {
-    fn start(mut self) {
+    fn start(mut self) -> JoinHandle<BoxError> {
         let read_task = move || async move {
             info!(
                 "Spawning read task for the client {}",
@@ -146,7 +182,7 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
                         {
                             error!(
                                 "Could not send the termination of the \
-                            peer to the runtime via channel, reason : {}",
+                                peer to the runtime via channel, reason : {}",
                                 err
                             );
                         }
@@ -154,13 +190,14 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
                     }
                 }
             }
+            Ok::<(), Box<PeerError>>(())
         };
-        tokio::task::spawn(read_task());
+        tokio::task::spawn(read_task())
     }
 }
 
 impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
-    fn start(self) {
+    fn start(mut self) -> JoinHandle<BoxError> {
         debug!("Starting upstream stream halve");
         tokio::spawn(async {
 
@@ -169,32 +206,51 @@ impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
                     format!("tcp://{}", self.stream_halve.metadata.socket_addr.to_string())
                 ).map_err(|err| {
                     debug!("Cannot connect to the GRPC server [{:?}]", err);
-                    tonic::Status::aborted("Cannot connect to the GRPC server")
+                    return Box::new(PeerError::ServerClosed)
                 }).await?;
 
+            debug!("calling method");
             let call_method =
                 connect_client.bidirectional_streaming(
                     tonic::Request::new(self.grpc_rx_channel)).await?;
 
             if let mut method_stream = call_method.into_inner() {
-                debug!("Been able to call the method");
-
-                if let Some(message) = method_stream.message().await? {
-                    debug!("Got a new message : [{:?}]", message);
+                debug!("Stream to the method created");
+                loop {
+                    match method_stream.message().await {
+                        Ok(stream_res) => {
+                            match stream_res {
+                                Some(some) => {
+                                    debug!("NEW message: [{:?}]", some);
+                                },
+                                None => {
+                                    info!("RECEIVED NONE as response, \
+                                    weird, please contact the developer");
+                                }
+                            }
+                        },
+                        Err(err) => {
+                            error!("The error code [{:?}]", err.code() as u8);
+                            error!("The error message [{:?}]", err);
+                            self.stream_halve.runtime_tx.send(
+                                RuntimeEvent::PeerTerminatedConnection(
+                                    self.stream_halve.metadata.clone()));
+                            return Err(Box::new(PeerError::BrokenPipe));
+                        }
+                    }
                 }
-
             } else {
                 debug!("Cannot call method: because");
             }
             debug!("Handle GRPC4");
 
-            Ok::<(), tonic::Status>(())
-        });
+            Ok::<(), Box<PeerError>>(())
+        })
     }
 }
 
 impl PeerHalveRuntime for DownstreamPeerSinkHalve {
-    fn start(mut self) {
+    fn start(mut self) -> JoinHandle<BoxError> {
         let write_task = move || async move {
             info!(
                 "Spawning writing task for the client {}",
@@ -224,8 +280,9 @@ impl PeerHalveRuntime for DownstreamPeerSinkHalve {
                     info!("Weird got nothing");
                 }
             }
+            Ok::<(), Box<PeerError>>(())
         };
-        tokio::task::spawn(write_task());
+        tokio::task::spawn(write_task())
     }
 }
 

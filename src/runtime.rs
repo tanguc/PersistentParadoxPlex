@@ -127,7 +127,7 @@ impl Runtime {
                 None => {
                     debug!(
                         "Looks like all senders halves of runtime have \
-                    been dropped"
+                        been dropped"
                     );
                 }
             }
@@ -139,7 +139,7 @@ impl Runtime {
     /// Remove reference of the front peer
     /// and returns the Sender channels of each tasks related to (Sink &
     /// Stream)
-    async fn remove_front_peer(
+    async fn remove_downstream_peer(
         &mut self,
         peer_metadata: PeerMetadata,
     ) -> RuntimeResult<(Option<PeerTxChannel>, Option<PeerTxChannel>)> {
@@ -177,7 +177,7 @@ impl Runtime {
         debug!("Handle peer terminated connection");
 
         let (peer_sink_tx, _) =
-            self.remove_front_peer(peer_metadata.clone()).await?;
+            self.remove_downstream_peer(peer_metadata.clone()).await?;
         let mut peer_sink_tx =
             peer_sink_tx.ok_or(RuntimeError::PeerHalveDown(peer_metadata.clone()))?;
 
