@@ -13,7 +13,7 @@ to identify all clients by a unique way (maybe a kind of identified).
 To do that, most of clients have to change their implementations by adding
 some custom metadata in their flowing frames or by using a sticky load
 balancer which will keep a context for each incoming client.
- 
+
 We aim to support these features:
 
 - Service Discovery (what are my upstreams servers)
@@ -55,3 +55,18 @@ simple solution.
  
  ![Architecture overview](./PersistentMarkingLB_architecture_overview.png)
  
+
+# **Development workflows**
+
+## Start the upstream peer with supported GRPC protocol
+
+For development purposes, it's much better to have another peer which will respond
+to our messages, by sending a dummy message !
+
+To start the GRPC server:
+``sh
+cd misc/grpc && sh start_stub_server.sh
+``
+
+This is a docker container with the port `4770` open, which we'll use to call it from our runtime.
+

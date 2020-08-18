@@ -1,11 +1,8 @@
-use crate::peer::{
-    PeerMetadata,
-    PeerTxChannel,
-    DownstreamPeerSinkHalve,
-    DownstreamPeerStreamHalve,
-    UpstreamPeerHalve
-};
 use crate::backend;
+use crate::peer::{
+    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerMetadata, PeerTxChannel,
+    UpstreamPeerHalve,
+};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -13,7 +10,7 @@ use std::net::SocketAddr;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use uuid::Uuid;
 
 pub type PersistentMarkingLBRuntime = Arc<Mutex<Runtime>>;
@@ -29,10 +26,10 @@ pub enum PeerEvent<T> {
     Start,
     Pause,
     Stop,
-    Write(T)
+    Write(T),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum RuntimeEvent {
     NoOrder,
     ShutdownPeer,
@@ -40,6 +37,11 @@ pub enum RuntimeEvent {
     GotMessageFromUpstreamPeer(String),
     GotMessageFromDownstream(String),
     PeerTerminatedConnection(PeerMetadata),
+    GetUpstreamPeer(
+        tokio::sync::oneshot::Sender<
+            Option<tokio::sync::mpsc::UnboundedSender<backend::InputStreamRequest>>,
+        >,
+    ),
 }
 
 #[derive(Debug)]
@@ -69,8 +71,7 @@ enum RuntimeError {
 
 impl Runtime {
     pub fn new() -> Runtime {
-        let (tx, rx) =
-            mpsc::channel::<RuntimeEvent>(1000);
+        let (tx, rx) = mpsc::channel::<RuntimeEvent>(1000);
         let runtime = Runtime {
             tx,
             peers_pool: Arc::new(Mutex::new(RuntimePeersPool {
@@ -89,49 +90,76 @@ impl Runtime {
     fn start(mut self, mut rx: mpsc::Receiver<RuntimeEvent>) {
         let runtime_task = async move {
             debug!("Starting runtime of PersistentMarkingLB");
-            match rx.recv().await {
-                Some(runtime_event) => {
-                    info!("Got order from a client");
-                    match runtime_event {
-                        RuntimeEvent::NoOrder => {
-                            debug!("NoOrder");
-                        }
-                        RuntimeEvent::ShutdownPeer => {
-                            debug!("Peer shutdown");
-                        }
-                        RuntimeEvent::PausePeer => {
-                            debug!("Peer paused");
-                        }
-                        RuntimeEvent::PeerTerminatedConnection(peer_metadata) => {
-                            {
-                                let scope_lock = self.peers_pool.lock().await;
-                                debug!(
-                                    "Before termination hashmap: \n\
-                                {:?}\
-                                \n\
-                                {:?}",
-                                    scope_lock.downstream_peers_stream_tx,
-                                    scope_lock.downstream_peers_sink_tx,
-                                );
+            loop {
+                match rx.recv().await {
+                    Some(runtime_event) => {
+                        info!("Got order from a client");
+                        match runtime_event {
+                            RuntimeEvent::NoOrder => {
+                                debug!("NoOrder");
                             }
-                            self.handle_peer_termination(peer_metadata).await;
-                        }
-                        RuntimeEvent::GotMessageFromUpstreamPeer(_) => {
-                            debug!("GotMessageFromUpstreamPeer")
-                        }
-                        RuntimeEvent::GotMessageFromDownstream(_) => {
-                            debug!("GotMessageFromDownstream")
+                            RuntimeEvent::ShutdownPeer => {
+                                debug!("Peer shutdown");
+                            }
+                            RuntimeEvent::PausePeer => {
+                                debug!("Peer paused");
+                            }
+                            RuntimeEvent::PeerTerminatedConnection(peer_metadata) => {
+                                {
+                                    let scope_lock = self.peers_pool.lock().await;
+                                    debug!(
+                                        "Before termination hashmap: \n\
+                                    {:?}\
+                                    \n\
+                                    {:?}",
+                                        scope_lock.downstream_peers_stream_tx,
+                                        scope_lock.downstream_peers_sink_tx,
+                                    );
+                                }
+                                self.handle_peer_termination(peer_metadata).await;
+                            }
+                            RuntimeEvent::GotMessageFromUpstreamPeer(_) => {
+                                debug!("GotMessageFromUpstreamPeer")
+                            }
+                            RuntimeEvent::GotMessageFromDownstream(_) => {
+                                debug!("GotMessageFromDownstream")
+                            }
+                            RuntimeEvent::GetUpstreamPeer(oneshot_answer) => {
+                                debug!("GetUpstreamPeer order");
+                                let upstreams = self.peers_pool.lock().await;
+                                let mut upstream_tx = Option::None;
+                                if !upstreams.upstream_peers_sink_tx.is_empty() {
+                                    // TODO this one shouldnt act like that but find the best peer (by round robin)
+                                    for upstream_tx_channel in
+                                        upstreams.upstream_peers_sink_tx.iter()
+                                    {
+                                        upstream_tx = Option::Some(upstream_tx_channel.1.clone());
+                                    }
+                                }
+                                match oneshot_answer.send(upstream_tx) {
+                                    Ok(_) => {
+                                        debug!("Successfully sent upstream peer tx");
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            "Failed to send the upstream peer one short answer : {:?}",
+                                            err
+                                        );
+                                    }
+                                };
+                            }
                         }
                     }
-                }
-                None => {
-                    debug!(
-                        "Looks like all senders halves of runtime have \
-                        been dropped"
-                    );
+                    None => {
+                        debug!(
+                            "Looks like all senders halves of runtime have \
+                            been dropped"
+                        );
+                    }
                 }
             }
         };
+        debug!("Dropping the runtime task");
 
         tokio::task::spawn(runtime_task);
     }
@@ -176,43 +204,39 @@ impl Runtime {
     async fn handle_peer_termination(&mut self, peer_metadata: PeerMetadata) -> RuntimeResult<()> {
         debug!("Handle peer terminated connection");
 
-        let (peer_sink_tx, _) =
-            self.remove_downstream_peer(peer_metadata.clone()).await?;
+        let (peer_sink_tx, _) = self.remove_downstream_peer(peer_metadata.clone()).await?;
         let mut peer_sink_tx =
             peer_sink_tx.ok_or(RuntimeError::PeerHalveDown(peer_metadata.clone()))?;
 
-        peer_sink_tx
-            .send(PeerEvent::Stop)
-            .await
-            .map_err(|_| {
-                error!(
-                    "Cannot send a termination order to the sink task \
+        peer_sink_tx.send(PeerEvent::Stop).await.map_err(|_| {
+            error!(
+                "Cannot send a termination order to the sink task \
                     of the peer : {}",
-                    peer_metadata
-                );
-                RuntimeError::PeerChannelCommunicationError(peer_metadata.clone())
-            })
+                peer_metadata
+            );
+            RuntimeError::PeerChannelCommunicationError(peer_metadata.clone())
+        })
     }
 
     pub async fn add_upstream_peer_halves(
         &mut self,
-        peer_halve: &UpstreamPeerHalve<backend::InputStreamRequest>
+        peer_halve: &UpstreamPeerHalve<backend::InputStreamRequest>,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
         locked_peers_pool.upstream_peers_stream_tx.insert(
             peer_halve.stream_halve.metadata.uuid,
-            peer_halve.stream_halve.tx.clone()
+            peer_halve.stream_halve.tx.clone(),
         );
 
         locked_peers_pool.upstream_peers_sink_tx.insert(
             peer_halve.stream_halve.metadata.uuid,
-            peer_halve.grpc_tx_channel.clone()
+            peer_halve.grpc_tx_channel.clone(),
         );
 
         locked_peers_pool.peers_addr_uuids.insert(
             peer_halve.stream_halve.metadata.socket_addr.clone(),
-            peer_halve.stream_halve.metadata.uuid
+            peer_halve.stream_halve.metadata.uuid,
         );
     }
 
