@@ -1,0 +1,1 @@
+docker run -p 4770:4770 -p 4771:4771 -v $PWD/proto:/proto -v $PWD/stub:/stub tkpd/gripmock --stub=/stub /proto/upstream.proto

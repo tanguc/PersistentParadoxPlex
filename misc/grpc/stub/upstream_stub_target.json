@@ -1,0 +1,18 @@
+{
+    "service": "UpstreamPeerService",
+    "method": "BidirectionalStreaming",
+    "input": {
+        "contains": {
+            "payload": "salut"
+        }
+    },
+    "output": {
+        "data": {
+            "header": {
+                "address": "182.3.12.5",
+                "time": "07:24:32"
+            },
+            "payload": "Salut à toi !!!! ça va ?"
+        }
+    }
+}
