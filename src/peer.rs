@@ -153,7 +153,7 @@ pub trait PeerHalveRuntime {
     fn start(self) -> JoinHandle<BoxError>;
 }
 
-fn prepareUpstreamSinkRequest(payload: String) -> backend::InputStreamRequest {
+fn prepare_upstream_sink_request(payload: String) -> backend::InputStreamRequest {
     let address = String::from("127.0.0.1");
     let time = String::from("14:12:44");
 
@@ -219,18 +219,22 @@ impl PeerHalveRuntime for DownstreamPeerStreamHalve {
                                 match upstream_tx_channel {
                                     Some(tx_channel) => {
                                         debug!("Writing to the upstream peer");
-                                        let request = prepareUpstreamSinkRequest(line);
-                                        tx_channel.send(request);
+                                        let request = prepare_upstream_sink_request(line);
+                                        if let Err(err) = tx_channel.send(request) {
+                                            error!("Failed to send an input request to the upstream: {:?}", err);
+                                        }
                                     }
                                     None => {
-                                        debug!("Didnt find any channel available to send from downstream");
+                                        debug!(
+                                            "Didnt find any channel available to send from downstream"
+                                        );
                                     }
                                 }
                             }
-                            Err(codecError) => {
+                            Err(codec_error) => {
                                 error!(
                                     "Got a codec error when received downstream payload: {:?}",
-                                    codecError
+                                    codec_error
                                 );
                             }
                         }
@@ -279,18 +283,21 @@ impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
                 .bidirectional_streaming(tonic::Request::new(self.grpc_rx_channel))
                 .await?;
 
-            let mut method_stream = call_method.into_inner();
+            let mut read_stream_loop = call_method.into_inner();
             loop {
-                debug!("Stream to the method created");
-                match method_stream.message().await {
+                debug!("Starting reading loop from upstream..");
+                match read_stream_loop.message().await {
                     Ok(stream_res) => match stream_res {
-                        Some(some) => {
-                            debug!("NEW message: [{:?}]", some);
+                        Some(message) => {
+                            debug!("Got message from upstream: [{:?}]", message);
+                            let order = RuntimeEvent::MessageToDownstreamPeer(message);
+                            if let Err(err) = self.stream_halve.runtime_tx.send(order).await {
+                                error!("Failed to send the order MessageToDownstreamPeer to the runtime [{:?}]", err);
+                            }
                         }
                         None => {
                             error!(
-                                "RECEIVED NONE as response, \
-                                    weird, please contact the developer"
+                                "Received NONE from upstream, weird, please contact the developer"
                             );
                         }
                     },
@@ -318,13 +325,56 @@ impl PeerHalveRuntime for UpstreamPeerHalve<backend::InputStreamRequest> {
                     }
                 }
             }
-
-            debug!("Handle GRPC4");
-
-            Ok::<(), Box<PeerError>>(())
         })
     }
 }
+
+fn prepare_downstream_sink_request(payload: std::string::String) -> backend::InputStreamRequest {
+    debug!("Preparing downstream peer input request");
+
+    let request = backend::InputStreamRequest {
+        header: Option::Some(backend::Header {
+            time: "92:398:329".to_string(),
+            address: "127.43.49.30".to_string(),
+        }),
+        payload: payload,
+    };
+
+    return request;
+}
+
+// async fn get_downstream_peer(
+//     mut runtime_tx: RuntimeOrderTxChannel,
+//     client_uuid: &str,
+// ) -> Option<tokio::sync::mpsc::Sender<backend::InputStreamRequest>> {
+//     debug!(
+//         "Finding the downstream client with UUID [{:?}]",
+//         client_uuid
+//     );
+
+//     let oneshot_channel = tokio::sync::oneshot::channel::<
+//         Option<tokio::sync::mpsc::Sender<backend::InputStreamRequest>>,
+//     >();
+
+//     let order = RuntimeEvent::MessageToDownstreamPeer((oneshot_channel.0, client_uuid.to_string()));
+//     let mut downstream_peer_tx = Option::None;
+
+//     match runtime_tx.send(order).await {
+//         Ok(_) => match tokio::join!(oneshot_channel.1).0 {
+//             Ok(runtime_downstream_peer_tx) => {
+//                 debug!("Received answer to GetDownstreamPeer order");
+//             }
+//             Err(err) => {
+//                 error!("Failed to receive GetDownstreamPeer answer from the runtime (oneshot channel) [{:?}]", err);
+//             }
+//         },
+//         Err(err) => {
+//             error!("Failed to send GetDownstreamPeer order to the runtime");
+//         }
+//     }
+
+//     return downstream_peer_tx;
+// }
 
 impl PeerHalveRuntime for DownstreamPeerSinkHalve {
     fn start(mut self) -> JoinHandle<BoxError> {
@@ -335,9 +385,9 @@ impl PeerHalveRuntime for DownstreamPeerSinkHalve {
             );
             loop {
                 // self.tcp_sink.
-                if let Some(sink_order) = self.halve.rx.recv().await {
+                if let Some(event) = self.halve.rx.recv().await {
                     info!("Got order from another task to sink");
-                    match sink_order {
+                    match event {
                         PeerEvent::Start => {
                             info!("Starting the writing");
                         }
@@ -346,6 +396,9 @@ impl PeerHalveRuntime for DownstreamPeerSinkHalve {
                         }
                         PeerEvent::Write(_payload) => {
                             info!("WRITING PAYLOADDDD");
+
+                            let downstream_message = prepare_downstream_sink_request(_payload);
+
                             // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
                         }
                         PeerEvent::Stop => {

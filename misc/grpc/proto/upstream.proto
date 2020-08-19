@@ -3,12 +3,14 @@ syntax = "proto3";
 package upstream;
 
 service UpstreamPeerService {
-  rpc bidirectionalStreaming (stream InputStreamRequest) returns (stream OutputStreamRequest) {}
+  rpc bidirectionalStreaming(stream InputStreamRequest)
+      returns (stream OutputStreamRequest) {}
 }
 
 message header {
   string address = 1;
   string time = 2;
+  string client_uuid = 3;
 }
 
 message InputStreamRequest {
@@ -20,4 +22,3 @@ message OutputStreamRequest {
   header header = 1;
   string payload = 2;
 }
-

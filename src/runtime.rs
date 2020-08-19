@@ -42,6 +42,7 @@ pub enum RuntimeEvent {
             Option<tokio::sync::mpsc::UnboundedSender<backend::InputStreamRequest>>,
         >,
     ),
+    MessageToDownstreamPeer(backend::OutputStreamRequest),
 }
 
 #[derive(Debug)]
@@ -147,6 +148,44 @@ impl Runtime {
                                         );
                                     }
                                 };
+                            }
+                            RuntimeEvent::MessageToDownstreamPeer(metadata) => {
+                                debug!("Runtime - GetDownstreamPeer order");
+                                debug!(
+                                    "Trying to find the downstream peer with UUID [{:?}]",
+                                    metadata.header
+                                );
+
+                                let peers_pool = &*self.peers_pool.lock().await;
+                                let mut downstream_peer = Option::None;
+                                // TODO should be choosen by uuid and not randomly
+                                if !peers_pool.downstream_peers_sink_tx.is_empty() {
+                                    for downstream_peer_sink_tx in
+                                        peers_pool.downstream_peers_sink_tx.iter()
+                                    {
+                                        downstream_peer =
+                                            Option::Some(downstream_peer_sink_tx.clone());
+                                    }
+                                } else {
+                                    error!(
+                                        "No downstream peer has been found for the UUID [{:?}] ",
+                                        metadata.header
+                                    );
+                                }
+
+                                if let Some(downstream_peer) = downstream_peer {
+                                    debug!(
+                                        "Sending the Writing order to the downstream peer [{:?}]",
+                                        downstream_peer.0
+                                    );
+                                    let downstream_peer_event = PeerEvent::Write(metadata.payload);
+
+                                    if let Err(err) =
+                                        downstream_peer.1.send(downstream_peer_event).await
+                                    {
+                                        error!("Failed to send the Writing order to the downstream peer tx channel with UUID [{:?}]", err);
+                                    }
+                                }
                             }
                         }
                     }
