@@ -9,11 +9,10 @@ extern crate uuid;
 pub mod backend;
 pub mod peer;
 pub mod runtime;
+pub mod upstream;
 pub mod upstream_peer;
 pub mod utils;
-use crate::peer::{
-    create_peer_halves, create_upstream_halves, PeerError, PeerHalveRuntime, UpstreamPeerHalve,
-};
+use crate::peer::{PeerError, PeerRuntime};
 use crate::runtime::PeerEvent;
 use futures::StreamExt;
 use runtime::Runtime;
@@ -22,7 +21,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::{delay_for, Duration};
 
-async fn dummy_task_for_writing(
+/// should be in the downstream scope
+async fn dummy_task_for_writing_as_downstream_clients(
     mut peer_sink_tx_channel: tokio::sync::mpsc::Sender<PeerEvent<String>>,
 ) {
     info!("Starting the dummy data exchanger (to the sink peer)");
@@ -39,93 +39,50 @@ async fn dummy_task_for_writing(
     }
 }
 
-async fn handle_new_client(runtime: &mut Runtime, tcp_stream: TcpStream) {
-    info!("New client connected");
+/// should be in the runtime
+async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStream) {
+    info!("New downstream client connected");
 
     match tcp_stream.peer_addr() {
         Ok(peer_addr) => {
             debug!("Got client addr");
-            let (peer_sink, peer_stream) =
-                create_peer_halves(tcp_stream, peer_addr, runtime.tx.clone());
+            let downstream_peer =
+                peer::DownstreamPeer::new(tcp_stream, peer_addr, runtime.tx.clone());
 
-            runtime
-                .add_downstream_peer_halves(&peer_sink, &peer_stream)
-                .await;
+            match downstream_peer.start().await {
+                Ok(started) => {
+                    let sink_tx = started.sink_tx.clone();
+                    runtime
+                        .add_downstream_peer_halves(
+                            started.metadata.clone(),
+                            started.sink_tx,
+                            started.stream_tx,
+                        )
+                        .await;
 
-            //debug purposes
-            tokio::spawn(dummy_task_for_writing(peer_sink.halve.tx.clone()));
-
-            let peer_sink_handle = peer_sink.start();
-            let peer_stream_handle = peer_stream.start();
+                    let mut simulate_downstream_clients_tasks = false;
+                    if let Ok(_) = std::env::var("SIMULATE_DOWNSTREAM_CLIENTS") {
+                        debug!("Activating dummy downstream client");
+                        //debug purposes
+                        tokio::spawn(dummy_task_for_writing_as_downstream_clients(sink_tx));
+                        simulate_downstream_clients_tasks = true;
+                    }
+                    debug!(
+                        "Simulation of downstream client is [{}]",
+                        if simulate_downstream_clients_tasks {
+                            "ON"
+                        } else {
+                            "OFF"
+                        }
+                    );
+                }
+                Err(_) => {
+                    error!("Failed to start downstream peer runtime");
+                }
+            }
         }
         Err(_err) => {
             error!("Not able to retrieve client socket address");
-        }
-    }
-}
-
-pub struct UpstreamPeerMetadata {
-    pub host: SocketAddr,
-}
-
-pub enum UpstreamPeerMetadataError {
-    HostInvalid,
-}
-
-fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
-    debug!("Creating backend peers [DEBUGGING PURPOSES]");
-
-    let mut back_peers = vec![];
-
-    back_peers.push(UpstreamPeerMetadata {
-        host: "127.0.0.1:4770"
-            .parse()
-            .map_err(|err| {
-                error!("Could not parse addr: [{:?}]", err);
-            })
-            .unwrap(),
-    });
-
-    back_peers
-}
-
-pub async fn register_upstream_peers(mut runtime: Runtime) {
-    debug!("Registering upstream peers");
-    // TODO only for debugging purposes
-    let upstream_peer_metadata = get_upstream_peers();
-
-    for upstream_peer_metadata in upstream_peer_metadata {
-        let upstream_peer: UpstreamPeerHalve<backend::InputStreamRequest> =
-            create_upstream_halves(upstream_peer_metadata, runtime.tx.clone());
-        let upstream_stream_tx = upstream_peer.grpc_tx_channel.clone();
-
-        runtime.add_upstream_peer_halves(&upstream_peer).await;
-        upstream_peer.start();
-        {
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(20));
-                loop {
-                    interval.tick().await;
-                    debug!("Send a debug client request");
-                    let body = backend::InputStreamRequest {
-                        header: Option::Some(backend::Header {
-                            address: "823.12938I.3291833.".to_string(),
-                            time: "12:32:12".to_string(),
-                        }),
-                        payload: "Task spawn - client send fake data".to_string(),
-                    };
-                    if let Err(err) = upstream_stream_tx.send(body) {
-                        error!("Cannot send message from client (spawn task): [{:?}]", err);
-                        error!(
-                            "Looks like the halve channel has closed or dropped, aborting the task"
-                        );
-                        return;
-                    } else {
-                        debug!("Message sent");
-                    }
-                    debug!("Tick - new message to client, expecting a message from server task");
-                }
-            });
         }
     }
 }
@@ -151,7 +108,7 @@ async fn main() {
                 while let Some(client_stream) = incoming_streams.next().await {
                     match client_stream {
                         Ok(client_stream) => {
-                            handle_new_client(&mut runtime, client_stream).await;
+                            handle_new_downstream_client(&mut runtime, client_stream).await;
                         }
                         Err(_err) => {
                             error!("Cannot process the incoming client stream");

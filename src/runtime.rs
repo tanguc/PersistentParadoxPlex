@@ -21,7 +21,7 @@ pub type RuntimeOrderRxChannel = watch::Receiver<RuntimeEvent>;
 
 type RuntimeResult<T> = Result<T, RuntimeError>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum PeerEvent<T> {
     Start,
     Pause,
@@ -150,7 +150,7 @@ impl Runtime {
                                 };
                             }
                             RuntimeEvent::MessageToDownstreamPeer(metadata) => {
-                                debug!("Runtime - GetDownstreamPeer order");
+                                debug!("Runtime - MessageToDownstreamPeer order");
                                 debug!(
                                     "Trying to find the downstream peer with UUID [{:?}]",
                                     metadata.header
@@ -164,24 +164,22 @@ impl Runtime {
                                         peers_pool.downstream_peers_sink_tx.iter()
                                     {
                                         downstream_peer =
-                                            Option::Some(downstream_peer_sink_tx.clone());
+                                            Option::Some(downstream_peer_sink_tx.1.clone());
                                     }
                                 } else {
                                     error!(
-                                        "No downstream peer has been found for the UUID [{:?}] ",
-                                        metadata.header
+                                        "No downstream peer has been found for the UUID [TODO PUT UUID of the client here] "
                                     );
                                 }
 
-                                if let Some(downstream_peer) = downstream_peer {
+                                if let Some(mut downstream_peer) = downstream_peer {
                                     debug!(
-                                        "Sending the Writing order to the downstream peer [{:?}]",
-                                        downstream_peer.0
+                                        "Sending the Writing order to the downstream peer [TODO PUT UUID of the client here]"
                                     );
                                     let downstream_peer_event = PeerEvent::Write(metadata.payload);
 
                                     if let Err(err) =
-                                        downstream_peer.1.send(downstream_peer_event).await
+                                        downstream_peer.send(downstream_peer_event).await
                                     {
                                         error!("Failed to send the Writing order to the downstream peer tx channel with UUID [{:?}]", err);
                                     }
@@ -257,7 +255,7 @@ impl Runtime {
         })
     }
 
-    pub async fn add_upstream_peer_halves(
+    pub async fn add_upstream_peer_halves<T>(
         &mut self,
         peer_halve: &UpstreamPeerHalve<backend::InputStreamRequest>,
     ) {
@@ -281,22 +279,20 @@ impl Runtime {
 
     pub async fn add_downstream_peer_halves(
         &mut self,
-        peer_sink_halve: &DownstreamPeerSinkHalve,
-        peer_stream_halve: &DownstreamPeerStreamHalve,
+        metadata: PeerMetadata,
+        sink_tx: PeerTxChannel,
+        stream_tx: PeerTxChannel,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
-        locked_peers_pool.downstream_peers_stream_tx.insert(
-            peer_stream_halve.halve.metadata.uuid,
-            peer_stream_halve.halve.tx.clone(),
-        );
-        locked_peers_pool.downstream_peers_sink_tx.insert(
-            peer_sink_halve.halve.metadata.uuid,
-            peer_sink_halve.halve.tx.clone(),
-        );
-        locked_peers_pool.peers_addr_uuids.insert(
-            peer_sink_halve.halve.metadata.socket_addr,
-            peer_sink_halve.halve.metadata.uuid,
-        );
+        locked_peers_pool
+            .downstream_peers_stream_tx
+            .insert(metadata.uuid.clone(), stream_tx);
+        locked_peers_pool
+            .downstream_peers_sink_tx
+            .insert(metadata.uuid.clone(), sink_tx);
+        locked_peers_pool
+            .peers_addr_uuids
+            .insert(metadata.socket_addr.clone(), metadata.uuid.clone());
     }
 }
