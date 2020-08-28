@@ -1,7 +1,6 @@
 use crate::backend;
 use crate::peer::{
-    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerMetadata, PeerTxChannel,
-    UpstreamPeerHalve,
+    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerHalve, PeerMetadata, PeerTxChannel,
 };
 
 use std::collections::HashMap;
@@ -53,7 +52,7 @@ pub struct RuntimePeersPool {
 
     // Used to send data to write
     pub downstream_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
-    pub upstream_peers_sink_tx: HashMap<Uuid, mpsc::UnboundedSender<backend::InputStreamRequest>>,
+    pub upstream_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
 
     pub peers_addr_uuids: HashMap<SocketAddr, Uuid>,
 }
@@ -255,26 +254,25 @@ impl Runtime {
         })
     }
 
-    pub async fn add_upstream_peer_halves<T>(
+    pub async fn add_upstream_peer_halves(
         &mut self,
-        peer_halve: &UpstreamPeerHalve<backend::InputStreamRequest>,
+        sink_tx: PeerTxChannel,
+        stream_tx: PeerTxChannel,
+        metadata: PeerMetadata,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
-        locked_peers_pool.upstream_peers_stream_tx.insert(
-            peer_halve.stream_halve.metadata.uuid,
-            peer_halve.stream_halve.tx.clone(),
-        );
+        locked_peers_pool
+            .upstream_peers_stream_tx
+            .insert(metadata.uuid.clone(), stream_tx);
 
-        locked_peers_pool.upstream_peers_sink_tx.insert(
-            peer_halve.stream_halve.metadata.uuid,
-            peer_halve.grpc_tx_channel.clone(),
-        );
+        locked_peers_pool
+            .upstream_peers_sink_tx
+            .insert(metadata.uuid.clone(), sink_tx);
 
-        locked_peers_pool.peers_addr_uuids.insert(
-            peer_halve.stream_halve.metadata.socket_addr.clone(),
-            peer_halve.stream_halve.metadata.uuid,
-        );
+        locked_peers_pool
+            .peers_addr_uuids
+            .insert(metadata.socket_addr.clone(), metadata.uuid.clone());
     }
 
     pub async fn add_downstream_peer_halves(

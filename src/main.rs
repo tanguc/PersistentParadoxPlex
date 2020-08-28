@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::{delay_for, Duration};
+use upstream::register_upstream_peers;
 
 /// should be in the downstream scope
 async fn dummy_task_for_writing_as_downstream_clients(

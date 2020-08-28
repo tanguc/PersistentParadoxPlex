@@ -94,7 +94,7 @@ impl UpstreamPeerStateTransition for UpstreamPeerPending {
                     client,
                     grpc_tx_channel: self.grpc_tx_channel,
                     grpc_rx_channel: self.grpc_rx_channel,
-                }
+                })
             }
             Err(err) => {
                 debug!("Cannot connect to the GRPC server [{:?}]", err);
@@ -154,93 +154,97 @@ impl UpstreamPeer<UpstreamPeerPending> {
     }
 }
 
-// #[async_trait]
-// impl PeerRuntime for UpstreamPeer<Self::InitialState> {
-//     type InitialState = UptreamPeerPending;
+pub struct UpstreamPeerListening {
+    pub sink_tx: PeerTxChannel,
+    pub stream_tx: PeerTxChannel,
+    pub metadata: PeerMetadata,
+}
 
-//     /// Create stream halve for upstream peers (GRPC)
-//     /// Only stream halve is created, mainly because a
-//     /// dedicated task handle the received messages.
-//     /// The sink itself is a simple channel (mpsc) which will
-//     /// be retrievable from runtime (to send messages)
+impl UpstreamPeerReadyToListen {
+    fn start(mut self) {
+        debug!("[UpstreamPeerReadyToListen] starting...");
+        let task = async {
+            // let mut read_stream_loop = call_method.into_inner();
+            // loop {
+            //     debug!("Starting reading loop from upstream..");
+            //     match read_stream_loop.message().await {
+            //         Ok(stream_res) => match stream_res {
+            //             Some(message) => {
+            //                 debug!("Got message from upstream: [{:?}]", message);
+            //                 let order = RuntimeEvent::MessageToDownstreamPeer(message);
+            //                 if let Err(err) = self.stream_halve.runtime_tx.send(order).await {
+            //                     error!("Failed to send the order MessageToDownstreamPeer to the runtime [{:?}]", err);
+            //                 }
+            //             }
+            //             None => {
+            //                 error!(
+            //                     "Received NONE from upstream, weird, please contact the developer"
+            //                 );
+            //             }
+            //         },
+            //         Err(err) => {
+            //             error!("The error code [{:?}]", err.code() as u8);
+            //             error!("The error message [{:?}]", err);
+            //             debug!("Notifying the runtime about upstream termination...");
+            //             match self
+            //                 .stream_halve
+            //                 .runtime_tx
+            //                 .send(RuntimeEvent::PeerTerminatedConnection(
+            //                     self.stream_halve.metadata.clone(),
+            //                 ))
+            //                 .await
+            //             {
+            //                 Ok(_) => {
+            //                     debug!("Successfully notified the runtime");
+            //                 }
+            //                 Err(err) => {
+            //                     error!("Failed to send the upstream termination to the runtime");
+            //                     error!("{:?}", err);
+            //                 }
+            //             }
+            //             return Err(Box::new(PeerError::BrokenPipe));
+            //         }
+            //     }
+            // }
+        };
 
-//     async fn start(self) -> Result<PeerTxChannel, PeerError> {
-//         debug!("Starting upstream stream halve");
+        tokio::spawn(task);
+        todo!();
+    }
+}
 
-//         let task = async move {
-//             let connect = self.state.next()?;
+#[async_trait]
+impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
+    type Output = UpstreamPeerListening;
 
-//             tokio::spawn(self.listening());
-//             // need to do it in another task for this one
-//             // match
-//             // {
-//             //     Ok(response) => debug!(""),
-//             // }
+    async fn start(mut self) -> Result<Self::Output, PeerError> {
+        debug!("[UpstreamingPeer - UpstreamPeerPending] starting...");
 
-//             Ok::<PeerTxChannel, PeerError>(tx_channel)
-//         };
+        let metadata = self.state.stream_halve.metadata.clone();
+        let connected = self
+            .state
+            .next()
+            .await
+            .ok_or_else(|| PeerError::BrokenPipe)?;
+        let listening = connected
+            .next()
+            .await
+            .ok_or_else(|| PeerError::BrokenPipe)?;
 
-//         let toto = tokio::spawn(task).await;
-//         // let tata = toto.into_ok();
-//         // let titi = tata.into();
+        let tx = listening.stream_halve.tx.clone();
+        listening.start();
 
-//         // match  {
-//         //     Ok(upstream_tx_channel) => Ok(upstream_tx_channel.into().into()),
-//         //     Err(err) => {
-//         //         error!("[Upstream start] Failed to init the upstream peer.");
-//         //         Err::<PeerTxChannel, PeerError>(PeerError::BrokenPipe)
-//         //     }
-//         // }
+        //TODO create a task which will listen Events from runtime in order to sink to the GRPC clients
+        // dont forget to get the stream tx
+        // sink.start()
 
-//         // return handle.await?;
-//         // debug!("calling method");
-
-//         // let mut read_stream_loop = call_method.into_inner();
-//         // loop {
-//         //     debug!("Starting reading loop from upstream..");
-//         //     match read_stream_loop.message().await {
-//         //         Ok(stream_res) => match stream_res {
-//         //             Some(message) => {
-//         //                 debug!("Got message from upstream: [{:?}]", message);
-//         //                 let order = RuntimeEvent::MessageToDownstreamPeer(message);
-//         //                 if let Err(err) = self.stream_halve.runtime_tx.send(order).await {
-//         //                     error!("Failed to send the order MessageToDownstreamPeer to the runtime [{:?}]", err);
-//         //                 }
-//         //             }
-//         //             None => {
-//         //                 error!(
-//         //                     "Received NONE from upstream, weird, please contact the developer"
-//         //                 );
-//         //             }
-//         //         },
-//         //         Err(err) => {
-//         //             error!("The error code [{:?}]", err.code() as u8);
-//         //             error!("The error message [{:?}]", err);
-//         //             debug!("Notifying the runtime about upstream termination...");
-//         //             match self
-//         //                 .stream_halve
-//         //                 .runtime_tx
-//         //                 .send(RuntimeEvent::PeerTerminatedConnection(
-//         //                     self.stream_halve.metadata.clone(),
-//         //                 ))
-//         //                 .await
-//         //             {
-//         //                 Ok(_) => {
-//         //                     debug!("Successfully notified the runtime");
-//         //                 }
-//         //                 Err(err) => {
-//         //                     error!("Failed to send the upstream termination to the runtime");
-//         //                     error!("{:?}", err);
-//         //                 }
-//         //             }
-//         //             return Err(Box::new(PeerError::BrokenPipe));
-//         //         }
-//         //     }
-//         // }
-
-//         return Err(PeerError::BrokenPipe);
-//     }
-// }
+        Ok(UpstreamPeerListening {
+            sink_tx: tx.clone(),
+            stream_tx: tx.clone(),
+            metadata,
+        })
+    }
+}
 
 // ///should be in the runtime
 pub async fn register_upstream_peers(mut runtime: Runtime) {
@@ -250,9 +254,16 @@ pub async fn register_upstream_peers(mut runtime: Runtime) {
 
     for upstream_peer_metadata in upstream_peer_metadata {
         let upstream_peer = UpstreamPeer::new(upstream_peer_metadata, runtime.tx.clone());
+
         match upstream_peer.start().await {
-            Ok(upstream_peer_tx) => {
-                runtime.add_upstream_peer_halves(upstream_peer_tx).await;
+            Ok(upstream_peer) => {
+                runtime
+                    .add_upstream_peer_halves(
+                        upstream_peer.sink_tx.clone(),
+                        upstream_peer.stream_tx.clone(),
+                        upstream_peer.metadata.clone(),
+                    )
+                    .await;
             }
             Err(err) => {
                 error!("Failed to register the upstream peer to the runtime");

@@ -1,14 +1,14 @@
 use crate::backend;
-use crate::runtime::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel};
-use crate::upstream;
-use crate::UpstreamPeerMetadata;
+use crate::{
+    runtime::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel},
+    upstream::{get_upstream_tx_channel, prepare_upstream_sink_request},
+};
 use async_trait::async_trait;
 use futures::StreamExt;
 use std::fmt::{Debug, Display, Error, Formatter};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
 
@@ -55,7 +55,7 @@ pub struct DownstreamPeerSinkHalve {
 
 pub struct DownstreamPeerStreamHalve {
     halve: PeerHalve,
-    tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>,
+    tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>,
 }
 
 impl std::fmt::Display for PeerError {
@@ -104,16 +104,20 @@ impl DownstreamPeer {
     pub fn new(
         tcp_stream: TcpStream,
         socket_addr: SocketAddr,
-        runtime_tx: RuntimeOrderTxChannel
+        runtime_tx: RuntimeOrderTxChannel,
     ) -> Self {
         let frame = Framed::new(tcp_stream, LinesCodec::new());
         let (tcp_sink, tcp_stream) = frame.split::<String>();
         let uuid = Uuid::new_v4();
-    
+
         let peer_sink: DownstreamPeerSinkHalve =
             DownstreamPeerSinkHalve::new(tcp_sink, uuid, runtime_tx.clone(), socket_addr.clone());
-        let peer_stream: DownstreamPeerStreamHalve =
-            DownstreamPeerStreamHalve::new(tcp_stream, uuid, runtime_tx.clone(), socket_addr.clone());
+        let peer_stream: DownstreamPeerStreamHalve = DownstreamPeerStreamHalve::new(
+            tcp_stream,
+            uuid,
+            runtime_tx.clone(),
+            socket_addr.clone(),
+        );
 
         Self {
             metadata: PeerMetadata {
@@ -124,14 +128,13 @@ impl DownstreamPeer {
             stream: peer_stream,
         }
     }
-
 }
 
 #[async_trait]
 pub trait PeerRuntime {
-    type FinalState;
+    type Output;
 
-    async fn start(mut self) -> Result<Self::FinalState, PeerError>; // TODO should return the tx of the runtime of the peer (to handle runtiome event)
+    async fn start(mut self) -> Result<Self::Output, PeerError>; // TODO should return the tx of the runtime of the peer (to handle runtiome event)
 }
 
 pub struct DownstreamPeerFinalState {
@@ -139,7 +142,6 @@ pub struct DownstreamPeerFinalState {
     pub sink_tx: PeerTxChannel,
     pub stream_tx: PeerTxChannel,
 }
-
 
 impl DownstreamPeerSinkHalve {
     pub fn new(
@@ -183,16 +185,16 @@ impl PeerHalve {
 
 #[async_trait]
 impl PeerRuntime for DownstreamPeer {
-    type FinalState = DownstreamPeerFinalState;
+    type Output = DownstreamPeerFinalState;
 
-    async fn start(mut self) -> Result<Self::FinalState, PeerError> {
-       let sink_tx = self.sink.start();
+    async fn start(mut self) -> Result<Self::Output, PeerError> {
+        let sink_tx = self.sink.start();
         let stream_tx = self.stream.start();
 
         Ok(DownstreamPeerFinalState {
             metadata: self.metadata,
             sink_tx,
-            stream_tx
+            stream_tx,
         })
     }
 }
@@ -301,7 +303,7 @@ impl DownstreamPeerSinkHalve {
             Ok::<(), Box<PeerError>>(())
         };
         tokio::task::spawn(task());
-        
+
         tx
     }
 }
