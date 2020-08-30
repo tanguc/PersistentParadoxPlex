@@ -4,13 +4,13 @@ extern crate tokio;
 extern crate tokio_util;
 #[macro_use]
 extern crate log;
+extern crate enclose;
 extern crate uuid;
 
-pub mod backend;
 pub mod peer;
 pub mod runtime;
 pub mod upstream;
-pub mod upstream_peer;
+pub mod upstream_proto;
 pub mod utils;
 use crate::peer::{PeerError, PeerRuntime};
 use crate::runtime::PeerEvent;
@@ -92,15 +92,20 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
 async fn main() {
     pretty_env_logger::init();
 
-    // upstream_peer::compile_protos();
+    upstream_peer::compile_protos();
+    return ();
 
     debug!("Starting listener!");
     let mut runtime = Runtime::new();
-    register_upstream_peers(runtime.clone()).await;
+    register_upstream_peers(runtime.clone());
 
-    let addr = "127.0.0.1:7999";
+    error!("toto");
+    let port = 7999;
+    let uri = "127.0.0.1";
+    let addr = format!("{}:{}", uri, port);
+    debug!("[URI] = {} && [PORT] = {}", &uri, port);
 
-    let listener_res = TcpListener::bind(addr);
+    let listener_res = TcpListener::bind(addr.clone());
     let lb_server = async move {
         match listener_res.await {
             Ok(mut listener_res) => loop {

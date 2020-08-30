@@ -1,9 +1,10 @@
 use crate::backend;
 use crate::backend::backend_peer_service_client::UpstreamPeerServiceClient;
 use crate::peer::BoxError;
-use crate::peer::{PeerError, PeerHalve, PeerMetadata, PeerRuntime, PeerTxChannel};
+use crate::peer::{PeerError, PeerEventTxChannel, PeerHalve, PeerMetadata, PeerRuntime};
 use crate::runtime::{Runtime, RuntimeEvent, RuntimeOrderTxChannel};
 use async_trait::async_trait;
+use enclose::enclose;
 use futures::TryFutureExt;
 use std::net::SocketAddr;
 use tokio;
@@ -115,7 +116,7 @@ impl UpstreamPeerStateTransition for UpstreamPeerConnect {
             .await
         {
             Ok(stream) => {
-                self.grpc_tx_channel.clone();
+                // self.grpc_tx_channel.clone();
                 debug!("[Upstream init] Succeed to init the gRPC method.");
                 Some(UpstreamPeerReadyToListen {
                     stream_halve: self.stream_halve,
@@ -155,8 +156,8 @@ impl UpstreamPeer<UpstreamPeerPending> {
 }
 
 pub struct UpstreamPeerListening {
-    pub sink_tx: PeerTxChannel,
-    pub stream_tx: PeerTxChannel,
+    pub sink_tx: PeerEventTxChannel,
+    pub stream_tx: PeerEventTxChannel,
     pub metadata: PeerMetadata,
 }
 
@@ -247,56 +248,64 @@ impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
 }
 
 // ///should be in the runtime
-pub async fn register_upstream_peers(mut runtime: Runtime) {
-    debug!("Registering upstream peers");
-    // TODO only for debugging purposes
-    let upstream_peer_metadata = get_upstream_peers();
+/// Register all upstream peers from a source
+/// All wrapped into a separate task
+pub fn register_upstream_peers(mut runtime: Runtime) {
+    let task = async move {
+        debug!("Registering upstream peers");
+        // TODO only for debugging purposes
+        let upstream_peer_metadata = get_upstream_peers();
 
-    for upstream_peer_metadata in upstream_peer_metadata {
-        let upstream_peer = UpstreamPeer::new(upstream_peer_metadata, runtime.tx.clone());
+        for upstream_peer_metadata in upstream_peer_metadata {
+            let upstream_task = enclose!((mut runtime) move || async move {
+                let upstream_peer = UpstreamPeer::new(upstream_peer_metadata, runtime.tx.clone());
 
-        match upstream_peer.start().await {
-            Ok(upstream_peer) => {
-                runtime
-                    .add_upstream_peer_halves(
-                        upstream_peer.sink_tx.clone(),
-                        upstream_peer.stream_tx.clone(),
-                        upstream_peer.metadata.clone(),
-                    )
-                    .await;
-            }
-            Err(err) => {
-                error!("Failed to register the upstream peer to the runtime");
-            }
+                match upstream_peer.start().await {
+                    Ok(upstream_peer) => {
+                        runtime
+                            .add_upstream_peer_halves(
+                                upstream_peer.sink_tx.clone(),
+                                upstream_peer.stream_tx.clone(),
+                                upstream_peer.metadata.clone(),
+                            )
+                            .await;
+                    }
+                    Err(err) => {
+                        error!("Failed to register the upstream peer to the runtime");
+                    }
+                }
+            });
+            tokio::spawn(upstream_task());
+
+            // {
+            //     tokio::spawn(async move {
+            //         let mut interval = tokio::time::interval(Duration::from_secs(20));
+            //         loop {
+            //             interval.tick().await;
+            //             debug!("Send a debug client request");
+            //             let body = backend::InputStreamRequest {
+            //                 header: Option::Some(backend::Header {
+            //                     address: "823.12938I.3291833.".to_string(),
+            //                     time: "12:32:12".to_string(),
+            //                 }),
+            //                 payload: "Task spawn - client send fake data".to_string(),
+            //             };
+            //             if let Err(err) = upstream_stream_tx.send(body) {
+            //                 error!("Cannot send message from client (spawn task): [{:?}]", err);
+            //                 error!(
+            //                     "Looks like the halve channel has closed or dropped, aborting the task"
+            //                 );
+            //                 return;
+            //             } else {
+            //                 debug!("Message sent");
+            //             }
+            //             debug!("Tick - new message to client, expecting a message from server task");
+            //         }
+            //     });
+            // }
         }
-
-        // {
-        //     tokio::spawn(async move {
-        //         let mut interval = tokio::time::interval(Duration::from_secs(20));
-        //         loop {
-        //             interval.tick().await;
-        //             debug!("Send a debug client request");
-        //             let body = backend::InputStreamRequest {
-        //                 header: Option::Some(backend::Header {
-        //                     address: "823.12938I.3291833.".to_string(),
-        //                     time: "12:32:12".to_string(),
-        //                 }),
-        //                 payload: "Task spawn - client send fake data".to_string(),
-        //             };
-        //             if let Err(err) = upstream_stream_tx.send(body) {
-        //                 error!("Cannot send message from client (spawn task): [{:?}]", err);
-        //                 error!(
-        //                     "Looks like the halve channel has closed or dropped, aborting the task"
-        //                 );
-        //                 return;
-        //             } else {
-        //                 debug!("Message sent");
-        //             }
-        //             debug!("Tick - new message to client, expecting a message from server task");
-        //         }
-        //     });
-        // }
-    }
+    };
+    tokio::spawn(task);
 }
 
 // // impl PeerRuntime for UpstreamPeer<backend::InputStreamRequest> {
@@ -396,7 +405,7 @@ pub fn prepare_upstream_sink_request(payload: String) -> backend::InputStreamReq
 
 pub async fn get_upstream_tx_channel(
     mut runtime_tx: RuntimeOrderTxChannel,
-) -> Option<tokio::sync::mpsc::UnboundedSender<backend::InputStreamRequest>> {
+) -> Option<PeerEventTxChannel> {
     debug!("Finding an upstream channel available");
 
     let oneshot_answer = tokio::sync::oneshot::channel();

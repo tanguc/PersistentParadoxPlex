@@ -1,24 +1,40 @@
 syntax = "proto3";
 
-package upstream;
+package upstream.grpc.service;
 
 service UpstreamPeerService {
   rpc bidirectionalStreaming(stream InputStreamRequest)
       returns (stream OutputStreamRequest) {}
+  rpc ready(ReadyRequest) returns (ReadyResult);
+  rpc live(stream LiveRequest) returns (stream LiveResult);
 }
 
-message header {
+message ReadyRequest { Header header = 1; }
+
+message ReadyResult {
+  Header header = 1;
+  bool ready = 2;
+}
+
+message LiveRequest { Header header = 1; }
+
+message LiveResult {
+  Header header = 1;
+  bool live = 2;
+}
+
+message Header {
   string address = 1;
   string time = 2;
   string client_uuid = 3;
 }
 
 message InputStreamRequest {
-  header header = 1;
+  Header header = 1;
   string payload = 2;
 }
 
 message OutputStreamRequest {
-  header header = 1;
+  Header header = 1;
   string payload = 2;
 }

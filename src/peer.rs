@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
 
-pub type PeerTxChannel = mpsc::Sender<PeerEvent<String>>;
-pub type PeerRxChannel = mpsc::Receiver<PeerEvent<String>>;
+pub type PeerEventTxChannel = mpsc::Sender<PeerEvent<String>>;
+pub type PeerEventRxChannel = mpsc::Receiver<PeerEvent<String>>;
 
 #[derive(Clone, PartialEq)]
 pub struct PeerMetadata {
@@ -44,8 +44,8 @@ impl Display for PeerMetadata {
 pub struct PeerHalve {
     pub metadata: PeerMetadata,
     runtime_tx: RuntimeOrderTxChannel,
-    pub rx: PeerRxChannel,
-    pub tx: PeerTxChannel,
+    pub rx: PeerEventRxChannel,
+    pub tx: PeerEventTxChannel,
 }
 
 pub struct DownstreamPeerSinkHalve {
@@ -139,8 +139,8 @@ pub trait PeerRuntime {
 
 pub struct DownstreamPeerFinalState {
     pub metadata: PeerMetadata,
-    pub sink_tx: PeerTxChannel,
-    pub stream_tx: PeerTxChannel,
+    pub sink_tx: PeerEventTxChannel,
+    pub stream_tx: PeerEventTxChannel,
 }
 
 impl DownstreamPeerSinkHalve {
@@ -200,7 +200,7 @@ impl PeerRuntime for DownstreamPeer {
 }
 
 impl DownstreamPeerStreamHalve {
-    fn start(mut self) -> PeerTxChannel {
+    fn start(mut self) -> PeerEventTxChannel {
         let tx = self.halve.tx.clone();
         let task = move || async move {
             info!(
@@ -218,10 +218,13 @@ impl DownstreamPeerStreamHalve {
                                     get_upstream_tx_channel(self.halve.runtime_tx.clone()).await;
 
                                 match upstream_tx_channel {
-                                    Some(tx_channel) => {
+                                    Some(mut tx_channel) => {
                                         debug!("Writing to the upstream peer");
-                                        let request = prepare_upstream_sink_request(line);
-                                        if let Err(err) = tx_channel.send(request) {
+                                        // let request = prepare_upstream_sink_request(line);
+
+                                        if let Err(err) =
+                                            tx_channel.send(PeerEvent::Write(line)).await
+                                        {
                                             error!("Failed to send an input request to the upstream: {:?}", err);
                                         }
                                     }
@@ -267,7 +270,7 @@ impl DownstreamPeerStreamHalve {
 }
 
 impl DownstreamPeerSinkHalve {
-    fn start(mut self) -> PeerTxChannel {
+    fn start(mut self) -> PeerEventTxChannel {
         let tx = self.halve.tx.clone();
         let task = move || async move {
             info!(

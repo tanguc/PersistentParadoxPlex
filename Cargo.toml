@@ -1,22 +1,23 @@
 [package]
-name = "persistent_marking_lb"
-version = "0.1.0"
 authors = ["tanguc <sergen.tanguc@gmail.com>"]
 edition = "2018"
+name = "persistent_marking_lb"
+version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "0.2.13", features = ["sync", "macros", "net", "tcp", "stream", "rt-threaded", "time"] }
-pretty_env_logger = "0.4.0"
-log = "0.4.8"
+async-stream = "0.2.1"
+async-trait = "0.1.30"
+enclose = "1.1.8"
 futures = "0.3.4"
-tokio-util = { version = "0.3.0", features = ["codec"] }
-uuid = {version = "0.8.1", features = ["v4"]}
-tonic = { version = "0.2.0" }
-tonic-build = "0.2"
-prost = "0.6"
 futures-core = "0.3.4"
 futures-util = "0.3.4"
-async-trait = "0.1.30"
-async-stream = "0.2.1"
+log = "0.4.8"
+pretty_env_logger = "0.4.0"
+prost = "0.6"
+tokio = {version = "0.2.13", features = ["sync", "macros", "net", "tcp", "stream", "rt-threaded", "time"]}
+tokio-util = {version = "0.3.0", features = ["codec"]}
+tonic = {version = "0.2.0"}
+tonic-build = "0.2"
+uuid = {version = "0.8.1", features = ["v4"]}

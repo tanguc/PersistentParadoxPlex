@@ -1,6 +1,6 @@
 use crate::backend;
 use crate::peer::{
-    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerHalve, PeerMetadata, PeerTxChannel,
+    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventTxChannel, PeerHalve, PeerMetadata,
 };
 
 use std::collections::HashMap;
@@ -36,23 +36,19 @@ pub enum RuntimeEvent {
     GotMessageFromUpstreamPeer(String),
     GotMessageFromDownstream(String),
     PeerTerminatedConnection(PeerMetadata),
-    GetUpstreamPeer(
-        tokio::sync::oneshot::Sender<
-            Option<tokio::sync::mpsc::UnboundedSender<backend::InputStreamRequest>>,
-        >,
-    ),
+    GetUpstreamPeer(tokio::sync::oneshot::Sender<Option<PeerEventTxChannel>>),
     MessageToDownstreamPeer(backend::OutputStreamRequest),
 }
 
 #[derive(Debug)]
 pub struct RuntimePeersPool {
     // Used only for runtime orders
-    pub downstream_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
-    pub upstream_peers_stream_tx: HashMap<Uuid, PeerTxChannel>,
+    pub downstream_peers_stream_tx: HashMap<Uuid, PeerEventTxChannel>,
+    pub upstream_peers_stream_tx: HashMap<Uuid, PeerEventTxChannel>,
 
     // Used to send data to write
-    pub downstream_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
-    pub upstream_peers_sink_tx: HashMap<Uuid, PeerTxChannel>,
+    pub downstream_peers_sink_tx: HashMap<Uuid, PeerEventTxChannel>,
+    pub upstream_peers_sink_tx: HashMap<Uuid, PeerEventTxChannel>,
 
     pub peers_addr_uuids: HashMap<SocketAddr, Uuid>,
 }
@@ -206,7 +202,7 @@ impl Runtime {
     async fn remove_downstream_peer(
         &mut self,
         peer_metadata: PeerMetadata,
-    ) -> RuntimeResult<(Option<PeerTxChannel>, Option<PeerTxChannel>)> {
+    ) -> RuntimeResult<(Option<PeerEventTxChannel>, Option<PeerEventTxChannel>)> {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
         let peer_sink_tx;
@@ -256,8 +252,8 @@ impl Runtime {
 
     pub async fn add_upstream_peer_halves(
         &mut self,
-        sink_tx: PeerTxChannel,
-        stream_tx: PeerTxChannel,
+        sink_tx: PeerEventTxChannel,
+        stream_tx: PeerEventTxChannel,
         metadata: PeerMetadata,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
@@ -278,8 +274,8 @@ impl Runtime {
     pub async fn add_downstream_peer_halves(
         &mut self,
         metadata: PeerMetadata,
-        sink_tx: PeerTxChannel,
-        stream_tx: PeerTxChannel,
+        sink_tx: PeerEventTxChannel,
+        stream_tx: PeerEventTxChannel,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
