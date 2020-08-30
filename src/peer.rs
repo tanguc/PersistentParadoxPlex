@@ -1,7 +1,7 @@
-use crate::backend;
 use crate::{
     runtime::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel},
-    upstream::{get_upstream_tx_channel, prepare_upstream_sink_request},
+    upstream::get_upstream_tx_channel,
+    upstream_proto::{Header, InputStreamRequest},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -311,11 +311,12 @@ impl DownstreamPeerSinkHalve {
     }
 }
 
-fn prepare_downstream_sink_request(payload: std::string::String) -> backend::InputStreamRequest {
+fn prepare_downstream_sink_request(payload: std::string::String) -> InputStreamRequest {
     debug!("Preparing downstream peer input request");
 
-    let request = backend::InputStreamRequest {
-        header: Option::Some(backend::Header {
+    let request = InputStreamRequest {
+        header: Option::Some(Header {
+            client_uuid: String::from("totoierz"),
             time: "92:398:329".to_string(),
             address: "127.43.49.30".to_string(),
         }),
@@ -357,14 +358,14 @@ mod tests {
 // async fn get_downstream_peer(
 //     mut runtime_tx: RuntimeOrderTxChannel,
 //     client_uuid: &str,
-// ) -> Option<tokio::sync::mpsc::Sender<backend::InputStreamRequest>> {
+// ) -> Option<tokio::sync::mpsc::Sender<InputStreamRequest>> {
 //     debug!(
 //         "Finding the downstream client with UUID [{:?}]",
 //         client_uuid
 //     );
 
 //     let oneshot_channel = tokio::sync::oneshot::channel::<
-//         Option<tokio::sync::mpsc::Sender<backend::InputStreamRequest>>,
+//         Option<tokio::sync::mpsc::Sender<InputStreamRequest>>,
 //     >();
 
 //     let order = RuntimeEvent::MessageToDownstreamPeer((oneshot_channel.0, client_uuid.to_string()));

@@ -4,8 +4,6 @@ use futures_core::Stream;
 use std::path::PathBuf;
 use std::pin::Pin;
 use tokio;
-use upstream_proto::upstream_peer_service_server::UpstreamPeerService;
-use upstream_proto::{InputStreamRequest, OutputStreamRequest};
 
 static OUT_DIR: &str = "./generated";
 
@@ -14,7 +12,11 @@ pub fn compile_protos() {
 
     let generated_folder = PathBuf::from(OUT_DIR);
     if !generated_folder.exists() {
-        println!("Creating the folder to store generated proto files");
+        debug!(
+            "Creating the folder [{}] {} to store generated proto files",
+            generated_folder.clone().display().to_string(),
+            "toto"
+        );
         if let Err(err) = std::fs::create_dir_all(generated_folder.clone()) {
             panic!(
                 "Failed to create the folder [{:?}]",
@@ -35,10 +37,7 @@ pub fn compile_protos() {
     }
 }
 
-pub mod upstream_proto {
-    // tonic::include_proto!("backendpeer");
-    include!("upstream_proto.rs");
-}
+include!("../generated/upstream.grpc.service.rs");
 
 pub struct UpstreamPeerServiceImpl {
     rt_tx: RuntimeOrderTxChannel, // to send messages to downstream (frontend peeers)
@@ -46,8 +45,6 @@ pub struct UpstreamPeerServiceImpl {
     backend_peer_tx: PeerEventTxChannel, // channel to use on runtime to send a new message to upstream (backend peer)
     backend_peer_rx: PeerEventRxChannel, // channel to receive message to sink
 }
-
-trace_macros!(false);
 
 // /// DEBUGGING PURPOSES
 // #[tonic::async_trait]

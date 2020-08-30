@@ -1,8 +1,10 @@
-use crate::backend;
-use crate::backend::backend_peer_service_client::UpstreamPeerServiceClient;
-use crate::peer::BoxError;
-use crate::peer::{PeerError, PeerEventTxChannel, PeerHalve, PeerMetadata, PeerRuntime};
+use crate::peer::{BoxError, PeerError, PeerEventTxChannel, PeerHalve, PeerMetadata, PeerRuntime};
 use crate::runtime::{Runtime, RuntimeEvent, RuntimeOrderTxChannel};
+use crate::upstream_proto;
+use crate::upstream_proto::{
+    upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
+    OutputStreamRequest,
+};
 use async_trait::async_trait;
 use enclose::enclose;
 use futures::TryFutureExt;
@@ -12,8 +14,8 @@ use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use uuid::Uuid;
 
-type UpstreamPeerInputRequest = backend::InputStreamRequest;
-type UpstreamPeerOuputRequest = backend::OutputStreamRequest;
+type UpstreamPeerInputRequest = InputStreamRequest;
+type UpstreamPeerOuputRequest = OutputStreamRequest;
 
 pub enum UpstreamPeerMetadataError {
     HostInvalid,
@@ -55,7 +57,7 @@ pub struct UpstreamPeerConnect {
 }
 pub struct UpstreamPeerReadyToListen {
     pub stream_halve: PeerHalve,
-    pub stream: tonic::Streaming<backend::OutputStreamRequest>,
+    pub stream: tonic::Streaming<OutputStreamRequest>,
     pub grpc_tx_channel: tokio::sync::mpsc::UnboundedSender<UpstreamPeerInputRequest>,
 }
 
@@ -82,7 +84,7 @@ pub trait UpstreamPeerStateTransition {
 impl UpstreamPeerStateTransition for UpstreamPeerPending {
     type NextState = UpstreamPeerConnect;
     async fn next(self) -> Option<Self::NextState> {
-        match backend::backend_peer_service_client::UpstreamPeerServiceClient::connect(format!(
+        match UpstreamPeerServiceClient::connect(format!(
             "tcp://{}",
             self.stream_halve.metadata.socket_addr.to_string()
         ))
@@ -283,8 +285,8 @@ pub fn register_upstream_peers(mut runtime: Runtime) {
             //         loop {
             //             interval.tick().await;
             //             debug!("Send a debug client request");
-            //             let body = backend::InputStreamRequest {
-            //                 header: Option::Some(backend::Header {
+            //             let body = InputStreamRequest {
+            //                 header: Option::Some(Header {
             //                     address: "823.12938I.3291833.".to_string(),
             //                     time: "12:32:12".to_string(),
             //                 }),
@@ -308,12 +310,12 @@ pub fn register_upstream_peers(mut runtime: Runtime) {
     tokio::spawn(task);
 }
 
-// // impl PeerRuntime for UpstreamPeer<backend::InputStreamRequest> {
+// // impl PeerRuntime for UpstreamPeer<InputStreamRequest> {
 // //     fn start(mut self) -> JoinHandle<BoxError> {
 // // debug!("Starting upstream stream halve");
 // // tokio::spawn(async {
 // //     let mut connect_client =
-// //         backend::backend_peer_service_client::UpstreamPeerServiceClient::connect(format!(
+// //         backend_peer_service_client::UpstreamPeerServiceClient::connect(format!(
 // //             "tcp://{}",
 // //             self.stream_halve.metadata.socket_addr.to_string()
 // //         ))
@@ -391,12 +393,16 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     upstream_peers
 }
 
-pub fn prepare_upstream_sink_request(payload: String) -> backend::InputStreamRequest {
+pub fn prepare_upstream_sink_request(payload: String) -> InputStreamRequest {
     let address = String::from("127.0.0.1");
     let time = String::from("14:12:44");
 
-    let request = backend::InputStreamRequest {
-        header: Option::Some(backend::Header { address, time }),
+    let request = InputStreamRequest {
+        header: Option::Some(Header {
+            client_uuid: String::from("totoierz"), //TODO change it correctly ....
+            address,
+            time,
+        }),
         payload,
     };
 

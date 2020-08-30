@@ -1,4 +1,6 @@
 #![feature(trace_macros)]
+trace_macros!(false);
+
 extern crate pretty_env_logger;
 extern crate tokio;
 extern crate tokio_util;
@@ -12,9 +14,9 @@ pub mod runtime;
 pub mod upstream;
 pub mod upstream_proto;
 pub mod utils;
-use crate::peer::{PeerError, PeerRuntime};
 use crate::runtime::PeerEvent;
 use futures::StreamExt;
+use peer::{DownstreamPeer, PeerRuntime};
 use runtime::Runtime;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
@@ -49,8 +51,7 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
             debug!("Got client addr");
             let downstream_peer =
                 peer::DownstreamPeer::new(tcp_stream, peer_addr, runtime.tx.clone());
-
-            match downstream_peer.start().await {
+            match <DownstreamPeer as PeerRuntime>::start(downstream_peer).await {
                 Ok(started) => {
                     let sink_tx = started.sink_tx.clone();
                     runtime
@@ -92,7 +93,7 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
 async fn main() {
     pretty_env_logger::init();
 
-    upstream_peer::compile_protos();
+    upstream_proto::compile_protos();
     return ();
 
     debug!("Starting listener!");

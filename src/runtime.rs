@@ -1,7 +1,7 @@
-use crate::backend;
 use crate::peer::{
     DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventTxChannel, PeerHalve, PeerMetadata,
 };
+use crate::upstream_proto::{InputStreamRequest, OutputStreamRequest};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -37,7 +37,7 @@ pub enum RuntimeEvent {
     GotMessageFromDownstream(String),
     PeerTerminatedConnection(PeerMetadata),
     GetUpstreamPeer(tokio::sync::oneshot::Sender<Option<PeerEventTxChannel>>),
-    MessageToDownstreamPeer(backend::OutputStreamRequest),
+    MessageToDownstreamPeer(OutputStreamRequest),
 }
 
 #[derive(Debug)]
