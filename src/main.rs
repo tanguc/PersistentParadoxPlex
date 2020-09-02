@@ -9,14 +9,14 @@ extern crate log;
 extern crate enclose;
 extern crate uuid;
 
-pub mod peer;
+pub mod downstream;
 pub mod runtime;
 pub mod upstream;
 pub mod upstream_proto;
 pub mod utils;
 use crate::runtime::PeerEvent;
+use downstream::{DownstreamPeer, PeerRuntime};
 use futures::StreamExt;
-use peer::{DownstreamPeer, PeerRuntime};
 use runtime::Runtime;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
@@ -49,8 +49,7 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
     match tcp_stream.peer_addr() {
         Ok(peer_addr) => {
             debug!("Got client addr");
-            let downstream_peer =
-                peer::DownstreamPeer::new(tcp_stream, peer_addr, runtime.tx.clone());
+            let downstream_peer = DownstreamPeer::new(tcp_stream, peer_addr, runtime.tx.clone());
             match <DownstreamPeer as PeerRuntime>::start(downstream_peer).await {
                 Ok(started) => {
                     let sink_tx = started.sink_tx.clone();
@@ -93,14 +92,12 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
 async fn main() {
     pretty_env_logger::init();
 
-    upstream_proto::compile_protos();
-    return ();
+    // Uncomment only to compile protos
+    // upstream_proto::compile_protos();
 
-    debug!("Starting listener!");
     let mut runtime = Runtime::new();
     register_upstream_peers(runtime.clone());
 
-    error!("toto");
     let port = 7999;
     let uri = "127.0.0.1";
     let addr = format!("{}:{}", uri, port);

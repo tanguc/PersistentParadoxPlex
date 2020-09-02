@@ -43,7 +43,7 @@ impl Display for PeerMetadata {
 
 pub struct PeerHalve {
     pub metadata: PeerMetadata,
-    runtime_tx: RuntimeOrderTxChannel,
+    pub runtime_tx: RuntimeOrderTxChannel,
     pub rx: PeerEventRxChannel,
     pub tx: PeerEventTxChannel,
 }
@@ -277,6 +277,7 @@ impl DownstreamPeerSinkHalve {
                 "Spawning writing task for the client {}",
                 self.halve.metadata.uuid
             );
+            let mut paused = false;
             loop {
                 // self.tcp_sink.
                 if let Some(event) = self.halve.rx.recv().await {
@@ -285,11 +286,12 @@ impl DownstreamPeerSinkHalve {
                             info!("[Downstream sink ORDER] Start");
                         }
                         PeerEvent::Pause => {
+                            paused = true;
                             info!("[Downstream sink ORDER] Pause -");
                         }
                         PeerEvent::Write(_payload) => {
                             info!("[Downstream sink ORDER] Write -");
-
+                            //todo check if it's paused
                             let downstream_message = prepare_downstream_sink_request(_payload);
 
                             // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
@@ -297,6 +299,12 @@ impl DownstreamPeerSinkHalve {
                         PeerEvent::Stop => {
                             info!("[Downstream sink ORDER] Stop");
                             break;
+                        }
+                        PeerEvent::Resume => {
+                            trace!(
+                                "Resume the downstream sink [{}]",
+                                self.halve.metadata.uuid.clone()
+                            );
                         }
                     }
                 } else {

@@ -1,4 +1,4 @@
-use crate::peer::{
+use crate::downstream::{
     DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventTxChannel, PeerHalve, PeerMetadata,
 };
 use crate::upstream_proto::{InputStreamRequest, OutputStreamRequest};
@@ -26,6 +26,7 @@ pub enum PeerEvent<T> {
     Pause,
     Stop,
     Write(T),
+    Resume,
 }
 
 #[derive(Debug)]

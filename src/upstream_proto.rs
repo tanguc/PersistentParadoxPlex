@@ -1,4 +1,4 @@
-use crate::peer::{PeerEventRxChannel, PeerEventTxChannel};
+use crate::downstream::{PeerEventRxChannel, PeerEventTxChannel};
 use crate::runtime::{RuntimeEvent, RuntimeOrderRxChannel, RuntimeOrderTxChannel};
 use futures_core::Stream;
 use std::path::PathBuf;
@@ -13,9 +13,8 @@ pub fn compile_protos() {
     let generated_folder = PathBuf::from(OUT_DIR);
     if !generated_folder.exists() {
         debug!(
-            "Creating the folder [{}] {} to store generated proto files",
-            generated_folder.clone().display().to_string(),
-            "toto"
+            "Creating the folder [{}] to store generated proto files",
+            generated_folder.clone().display().to_string()
         );
         if let Err(err) = std::fs::create_dir_all(generated_folder.clone()) {
             panic!(
