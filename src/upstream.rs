@@ -9,8 +9,9 @@ use crate::upstream_proto::{
 };
 use async_trait::async_trait;
 use enclose::enclose;
-use std::net::SocketAddr;
+use std::{borrow::BorrowMut, fmt::Debug, net::SocketAddr};
 use tokio;
+use tonic::Status;
 use uuid::Uuid;
 
 type UpstreamPeerInputRequest = InputStreamRequest;
@@ -20,10 +21,14 @@ pub enum UpstreamPeerMetadataError {
     HostInvalid,
 }
 
+#[derive(Debug)]
 pub enum UpstreamPeerError {
     HalvesCreationError,
     CannotConnect,
     CannotListen,
+    RuntimeClosed,
+    HeaderMissingOrCorrupted,
+    RuntimeAbortOrder,
 }
 
 pub struct UpstreamPeerPending {
@@ -94,23 +99,21 @@ impl UpstreamPeerStateTransition for UpstreamPeerWaitReadiness {
     type NextState = UpstreamPeerReady;
     async fn next(mut self) -> Option<Self::NextState> {
         let ready_req = tonic::Request::new(ReadyRequest {
-            header: Some(Header {
-                address: String::from("127.293.23.302"),
-                time: String::from("09:38:93"),
-                client_uuid: String::from("8374-32KE-394U2-ZKND"),
-            }),
+            header: None,
+            ready: String::from("false"),
         });
 
         match self.client.ready(ready_req).await {
             Ok(is_ready) => {
                 if is_ready.get_ref().ready {
+                    debug!("[Upstream is ready]");
                     return Some(UpstreamPeerReady {
                         stream_halve: self.stream_halve,
                         sink_halve: self.sink_halve,
                         client: self.client,
                     });
                 } else {
-                    todo!("Retry again until limit");
+                    todo!("[Upstream readiness] Retry again until limit");
                 }
             }
             Err(err) => {
@@ -147,11 +150,24 @@ pub struct UpstreamPeerStarted {
     pub metadata: PeerMetadata,
 }
 
+/// state where the upstream has been correctly created
+/// but still need to init the sink & stream connection
+/// due to gRPC constraints, we force to start the sink runtime first
+/// then wait an order from another source to write then start the runtime for stream
+/// //TODO document about the stream (channel rx) which might be not available until the gRPC init has passed  
 impl UpstreamPeerReady {
     async fn start(mut self) {
-        debug!("[UpstreamPeerReadyToListen] starting...");
+        debug!("[UpstreamPeerReady] starting...");
 
         let (bi_stream_tx, bi_stream_rx) = tokio::sync::mpsc::channel(100);
+        // We need to start the sink before to stream,
+        // mainly because gRPC method is waiting from someone something to send
+        tokio::task::spawn(upstream_start_sink_runtime(
+            self.sink_halve.metadata,
+            self.sink_halve.runtime_tx,
+            self.sink_halve.rx,
+            bi_stream_tx,
+        ));
         match self
             .client
             .bidirectional_streaming(tonic::Request::new(bi_stream_rx))
@@ -159,21 +175,14 @@ impl UpstreamPeerReady {
         {
             Ok(response) => {
                 debug!("[Upstream init] Succeed to init the gRPC method.");
-
-                upstream_start_sink_runtime(
-                    self.sink_halve.metadata,
-                    self.sink_halve.runtime_tx,
-                    self.sink_halve.rx,
-                    bi_stream_tx,
-                )
-                .await;
-                upstream_start_stream_runtime(
+                // Until we haven't initiated the connection to the upstream (sink task above)
+                // we cannot stream from him
+                tokio::task::spawn(upstream_start_stream_runtime(
                     self.stream_halve.metadata,
                     self.stream_halve.rx,
                     self.stream_halve.runtime_tx,
                     response.into_inner(),
-                )
-                .await;
+                ));
             }
             Err(err) => {
                 error!(
@@ -215,60 +224,127 @@ impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
     }
 }
 
+async fn send_message_to_runtime(
+    mut runtime_tx: RuntimeOrderTxChannel,
+    metadata: PeerMetadata,
+    payload: RuntimeEvent,
+) -> Result<(), UpstreamPeerError> {
+    //TODO better to send enum
+
+    if let Err(err) = runtime_tx.send(payload).await {
+        error!(
+            "Failed to send the order to the runtime [{:?}] from upstream [{}], terminating the upstream streaming runtime",
+            err,
+            metadata.uuid.clone()
+        );
+        Ok(())
+    } else {
+        Err(UpstreamPeerError::RuntimeClosed)
+    }
+}
+
 async fn upstream_start_stream_runtime(
     metadata: PeerMetadata,
-    rx: PeerEventRxChannel,
-    runtime_tx: RuntimeOrderTxChannel,
-    bi_stream_rx: tonic::codec::Streaming<OutputStreamRequest>,
+    mut rx: PeerEventRxChannel,
+    mut runtime_tx: RuntimeOrderTxChannel,
+    mut bi_stream_rx: tonic::codec::Streaming<OutputStreamRequest>,
 ) {
-    debug!("[Starting upstream stream runtime...]");
+    let mut paused = false;
 
-    let task = || async {
-        // let mut read_stream_loop = call_method.into_inner();
-        // loop {
-        //     debug!("Starting reading loop from upstream..");
-        //     match read_stream_loop.message().await {
-        //         Ok(stream_res) => match stream_res {
-        //             Some(message) => {
-        //                 debug!("Got message from upstream: [{:?}]", message);
-        //                 let order = RuntimeEvent::MessageToDownstreamPeer(message);
-        //                 if let Err(err) = self.stream_halve.runtime_tx.send(order).await {
-        //                     error!("Failed to send the order MessageToDownstreamPeer to the runtime [{:?}]", err);
-        //                 }
-        //             }
-        //             None => {
-        //                 error!(
-        //                     "Received NONE from upstream, weird, please contact the developer"
-        //                 );
-        //             }
-        //         },
-        //         Err(err) => {
-        //             error!("The error code [{:?}]", err.code() as u8);
-        //             error!("The error message [{:?}]", err);
-        //             debug!("Notifying the runtime about upstream termination...");
-        //             match self
-        //                 .stream_halve
-        //                 .runtime_tx
-        //                 .send(RuntimeEvent::PeerTerminatedConnection(
-        //                     self.stream_halve.metadata.clone(),
-        //                 ))
-        //                 .await
-        //             {
-        //                 Ok(_) => {
-        //                     debug!("Successfully notified the runtime");
-        //                 }
-        //                 Err(err) => {
-        //                     error!("Failed to send the upstream termination to the runtime");
-        //                     error!("{:?}", err);
-        //                 }
-        //             }
-        //             return Err(Box::new(PeerError::BrokenPipe));
-        //         }
-        //     }
-        // }
-    };
+    // Decide if the upstream should pause/resume,
+    // <bool>true is returned if the runtime has closed or if the upstream should close (order coming from runtime)
+    let runtime_order_resolution = enclose!(
+        (mut runtime_tx, metadata)
+        move |runtime_order: Option<PeerEvent<String>>, paused: &mut bool| -> Result<(), UpstreamPeerError> {
+        if let Some(order) = runtime_order {
+            trace!("Received runtime order [{:?}] for upstream stream [{}]", order, metadata.uuid.clone());
+            match order {
+                PeerEvent::Pause => {
+                    trace!("Pausing upstream stream [{}]", metadata.uuid.clone());
+                    *paused = true;
+                    Ok(())
+                }
+                PeerEvent::Resume => {
+                    trace!("Resuming upstream stream [{}]", metadata.uuid.clone());
+                    *paused = false;
+                    Ok(())
+                }
+                PeerEvent::Stop => {
+                    trace!("Stopping upstream stream [{}]", metadata.uuid.clone());
+                    Err(UpstreamPeerError::RuntimeAbortOrder)
+                }
+                _ => {Ok(())}
+            }
+        } else {
+            trace!("Looks like runtime of upstream stream [{}] has been closed, terminating", metadata.uuid.clone());
+            Err(UpstreamPeerError::RuntimeClosed)
+        }
+    });
 
-    tokio::spawn(task());
+    let stream_resolution = enclose!(
+            (metadata)
+            move |bi_stream_rx_resp: Result<Option<OutputStreamRequest>, Status>, mut runtime_tx: RuntimeOrderTxChannel| {
+                let metadata = metadata.clone();
+                async move {
+                    debug!("[Resolution of received message...]");
+
+                    match bi_stream_rx_resp {
+                        Ok(stream_res) => {
+                            if let Some(req_message) = stream_res {
+                                trace!(
+                                    "Upstream[{}] - message [{:?}]",
+                                    metadata.uuid.clone(),
+                                    req_message
+                                );
+                                if let Some(header) = req_message.header {
+                                    let runtime_event = RuntimeEvent::MessageToDownstreamPeer(req_message.payload, header);
+                                    send_message_to_runtime(runtime_tx, metadata, runtime_event).await
+                                } else {
+                                    warn!(
+                                        "Upstream stream [{:?}] did not send any header in the message, skipping...",
+                                        metadata.uuid.clone()
+                                    );
+                                    Ok(())
+                                }
+                            } else {
+                                error!("Received NONE from upstream, weird, please contact the developer");
+                                Ok(())
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                "Failed to read from upstream && error code [{:?}] && error [{:?}",
+                                err.code() as u8,
+                                err
+                            );
+                            let runtime_event = RuntimeEvent::UptreamPeerStatusFail(metadata.clone());
+                            send_message_to_runtime(runtime_tx, metadata, runtime_event).await
+                        }
+                    }
+                }
+            }
+    );
+
+    let mut abort = false;
+    while !abort {
+        tokio::select! {
+            runtime_order = (rx.recv()), if paused => {
+                debug!("[Upstream stream runtime] got runtime order");
+                if let Err(err) = runtime_order_resolution(runtime_order, &mut paused) {
+                    error!("[Aborting Upstream [{:?}] stream runtime, cause [{:?}]", metadata.uuid.clone(), err);
+                    abort = true;
+                }
+            },
+            stream_resp = (bi_stream_rx.message()) => {
+                debug!("[Upstream stream runtime] got line");
+                if let Err(err) = stream_resolution(stream_resp, runtime_tx.clone()).await {
+                    error!("[Aborting Upstream [{:?}] stream runtime, cause [{:?}]", metadata.uuid.clone(), err);
+                    abort = true;
+                }
+            }
+        }
+    }
+    debug!("[Upstream [{:?}] aborted]", metadata.uuid.clone());
 }
 
 async fn upstream_start_sink_runtime(
@@ -277,13 +353,16 @@ async fn upstream_start_sink_runtime(
     mut rx: PeerEventRxChannel,
     mut bi_stream_tx: UpstreamBiStreamingSender,
 ) {
-    info!("[Starting upstream sink runtime]");
+    debug!("[Starting upstream sink runtime]");
     let mut paused = false;
 
     loop {
         match rx.recv().await {
             Some(runtime_order) => {
-                trace!("Upstream sink - got order {:?} from runtime", runtime_order);
+                trace!(
+                    "[Upstream sink] - got order {:?} from runtime",
+                    runtime_order
+                );
                 match runtime_order {
                     PeerEvent::Stop => {
                         trace!(
@@ -305,6 +384,7 @@ async fn upstream_start_sink_runtime(
                         );
                     }
                     PeerEvent::Write(data) => {
+                        debug!("[Upstream Write Event]");
                         if !paused {
                             //TODO would be much better to change the state of the sink loop
                             let size = data.len();
@@ -329,7 +409,9 @@ async fn upstream_start_sink_runtime(
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+                        debug!("[Upstream sink] Got another event");
+                    }
                 }
             }
             None => {
@@ -342,6 +424,7 @@ async fn upstream_start_sink_runtime(
 // ///should be in the runtime
 /// Register all upstream peers from a source
 /// All wrapped into a separate task
+/// Each upstream peer initialization are also wrapped into a different task
 pub fn register_upstream_peers(mut runtime: Runtime) {
     let task = async move {
         debug!("Registering upstream peers");
@@ -354,6 +437,7 @@ pub fn register_upstream_peers(mut runtime: Runtime) {
 
                 match upstream_peer.start().await {
                     Ok(upstream_peer) => {
+                        debug!("Registering upstream client [{:?}]", upstream_peer.metadata.uuid.clone());
                         runtime
                             .add_upstream_peer_halves(
                                 upstream_peer.sink_tx.clone(),
@@ -368,33 +452,6 @@ pub fn register_upstream_peers(mut runtime: Runtime) {
                 }
             });
             tokio::spawn(upstream_task());
-
-            // {
-            //     tokio::spawn(async move {
-            //         let mut interval = tokio::time::interval(Duration::from_secs(20));
-            //         loop {
-            //             interval.tick().await;
-            //             debug!("Send a debug client request");
-            //             let body = InputStreamRequest {
-            //                 header: Option::Some(Header {
-            //                     address: "823.12938I.3291833.".to_string(),
-            //                     time: "12:32:12".to_string(),
-            //                 }),
-            //                 payload: "Task spawn - client send fake data".to_string(),
-            //             };
-            //             if let Err(err) = upstream_stream_tx.send(body) {
-            //                 error!("Cannot send message from client (spawn task): [{:?}]", err);
-            //                 error!(
-            //                     "Looks like the halve channel has closed or dropped, aborting the task"
-            //                 );
-            //                 return;
-            //             } else {
-            //                 debug!("Message sent");
-            //             }
-            //             debug!("Tick - new message to client, expecting a message from server task");
-            //         }
-            //     });
-            // }
         }
     };
     tokio::spawn(task);
@@ -497,38 +554,4 @@ pub fn prepare_upstream_sink_request(payload: String) -> InputStreamRequest {
     };
 
     return request;
-}
-
-pub async fn get_upstream_tx_channel(
-    mut runtime_tx: RuntimeOrderTxChannel,
-) -> Option<PeerEventTxChannel> {
-    debug!("Finding an upstream channel available");
-
-    let oneshot_answer = tokio::sync::oneshot::channel();
-
-    let order = RuntimeEvent::GetUpstreamPeer(oneshot_answer.0);
-    match runtime_tx.send(order).await {
-        Ok(_) => {
-            debug!("Asked for an upstream peer to the runtime");
-            debug!("Waiting for an answer");
-
-            match tokio::join!(oneshot_answer.1).0 {
-                Ok(answer) => match answer {
-                    Some(upstream_grpc_tx) => {
-                        debug!("Got the channel of the upstream peer");
-                        Option::Some(upstream_grpc_tx)
-                    }
-                    None => Option::None,
-                },
-                Err(_) => {
-                    error!("Failed when received answer from runtime about the upstream peer");
-                    Option::None
-                }
-            }
-        }
-        Err(err) => {
-            error!("Failed when asked for an upstream stream, \n :{:?}", err);
-            Option::None
-        }
-    }
 }

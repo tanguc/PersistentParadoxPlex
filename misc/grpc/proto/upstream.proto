@@ -9,7 +9,15 @@ service UpstreamPeerService {
   rpc live(stream LiveRequest) returns (stream LiveResult);
 }
 
-message ReadyRequest { Header header = 1; }
+message ReadyRequest {
+  Header header = 1;
+  string ready = 2;
+  // ^^^^^^
+  // ||||||
+  // because https://github.com/tokopedia/gripmock/ have been coded by looser
+  // and they cant handle match of regexp on anything other than string, you
+  // sucks. TODO delete when wel'll get ride out of these tools.
+}
 
 message ReadyResult {
   Header header = 1;

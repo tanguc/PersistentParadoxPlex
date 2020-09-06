@@ -1,9 +1,9 @@
 {
   "service": "UpstreamPeerService",
-  "method": "BidirectionalStreaming",
+  "method": "Ready",
   "input": {
     "matches": {
-      "payload": ".*"
+      "ready": "false"
     }
   },
   "output": {
@@ -11,9 +11,9 @@
       "header": {
         "address": "182.3.12.4",
         "time": "12:29:39",
-        "client_uuid": "98234-939939-039845930"
+        "client_uuid": "983-8372-329848923"
       },
-      "payload": "Stubbed response, from GRPC server"
+      "ready": true
     }
   }
 }

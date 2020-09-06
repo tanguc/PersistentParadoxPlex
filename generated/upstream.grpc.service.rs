@@ -2,6 +2,13 @@
 pub struct ReadyRequest {
     #[prost(message, optional, tag = "1")]
     pub header: ::std::option::Option<Header>,
+    /// ^^^^^^
+    /// ||||||
+    /// because https://github.com/tokopedia/gripmock/ have been coded by looser
+    /// and they cant handle match of regexp on anything other than string, you
+    /// sucks. TODO delete when wel'll get ride out of these tools.
+    #[prost(string, tag = "2")]
+    pub ready: std::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadyResult {
