@@ -1,6 +1,7 @@
 use crate::{
-    runtime::{PeerEvent, RuntimeEvent, RuntimeOrderTxChannel},
-    upstream::get_upstream_tx_channel,
+    runtime::{
+        send_message_to_runtime, PeerEvent, RuntimeError, RuntimeEvent, RuntimeOrderTxChannel,
+    },
     upstream_proto::{Header, InputStreamRequest},
 };
 use async_trait::async_trait;
@@ -12,8 +13,8 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
 
-pub type PeerEventTxChannel = mpsc::Sender<PeerEvent<String>>;
-pub type PeerEventRxChannel = mpsc::Receiver<PeerEvent<String>>;
+pub type PeerEventTxChannel = mpsc::Sender<PeerEvent<(String, String)>>; // first param (payload) and second for uuid of the target peer
+pub type PeerEventRxChannel = mpsc::Receiver<PeerEvent<(String, String)>>;
 
 #[derive(Clone, PartialEq)]
 pub struct PeerMetadata {
@@ -173,7 +174,7 @@ impl DownstreamPeerStreamHalve {
 
 impl PeerHalve {
     pub fn new(uuid: Uuid, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
-        let (tx, rx) = mpsc::channel::<PeerEvent<String>>(1000);
+        let (tx, rx) = mpsc::channel(1000);
         PeerHalve {
             metadata: PeerMetadata { uuid, socket_addr },
             runtime_tx,
@@ -210,54 +211,55 @@ impl DownstreamPeerStreamHalve {
             loop {
                 let line = futures::stream::StreamExt::next(&mut self.tcp_stream).await;
                 match line {
-                    Some(line) => {
-                        match line {
-                            Ok(line) => {
-                                debug!("Got a new line : {:?}", line);
-                                let upstream_tx_channel =
-                                    get_upstream_tx_channel(self.halve.runtime_tx.clone()).await;
+                    Some(line) => match line {
+                        Ok(line) => {
+                            debug!("Got a new line : {:?}", line);
+                            let runtime_event = RuntimeEvent::MessageToUpstreamPeer(
+                                line,
+                                self.halve.metadata.uuid.clone().to_string(),
+                            );
 
-                                match upstream_tx_channel {
-                                    Some(mut tx_channel) => {
-                                        debug!("Writing to the upstream peer");
-                                        // let request = prepare_upstream_sink_request(line);
-
-                                        if let Err(err) =
-                                            tx_channel.send(PeerEvent::Write(line)).await
-                                        {
-                                            error!("Failed to send an input request to the upstream: {:?}", err);
-                                        }
+                            if let Err(err) = send_message_to_runtime(
+                                self.halve.runtime_tx.clone(),
+                                self.halve.metadata.clone(),
+                                runtime_event,
+                            )
+                            .await
+                            {
+                                error!("Failed to send runtime error, analyzing the error.");
+                                match err {
+                                    RuntimeError::Closed => {
+                                        error!("Failed to send message to runtime, because it has been closed, exiting downstream [{:?}] peer streaming runtime", self.halve.metadata.uuid.clone());
+                                        break;
                                     }
-                                    None => {
-                                        debug!(
-                                            "Didnt find any channel available to send from downstream"
-                                        );
-                                    }
+                                    _ => warn!(
+                                        "Failed to send message to runtime, cause [{:?}]",
+                                        err
+                                    ),
                                 }
                             }
-                            Err(codec_error) => {
-                                error!(
-                                    "Got a codec error when received downstream payload: {:?}",
-                                    codec_error
-                                );
-                            }
                         }
-                    }
-                    None => {
-                        debug!("Peer terminated connection, notifying runtime");
-                        if let Err(err) = self
-                            .halve
-                            .runtime_tx
-                            .send(RuntimeEvent::PeerTerminatedConnection(self.halve.metadata))
-                            .await
-                        {
+                        Err(codec_error) => {
                             error!(
-                                "Could not send the termination of the \
-                                peer to the runtime via channel, reason : {}",
-                                err
+                                "Got a codec error when received downstream payload: {:?}",
+                                codec_error
                             );
                         }
-                        break;
+                    },
+                    None => {
+                        debug!("[Peer terminated connection] notifying runtime");
+                        let runtime_event =
+                            RuntimeEvent::PeerTerminatedConnection(self.halve.metadata.clone());
+                        if let Err(err) = send_message_to_runtime(
+                            self.halve.runtime_tx.clone(),
+                            self.halve.metadata.clone(),
+                            runtime_event,
+                        )
+                        .await
+                        {
+                            error!("[Failed to send message to runtime], aborting because peer has terminated");
+                            break;
+                        }
                     }
                 }
             }
@@ -289,7 +291,7 @@ impl DownstreamPeerSinkHalve {
                             paused = true;
                             info!("[Downstream sink ORDER] Pause -");
                         }
-                        PeerEvent::Write(_payload) => {
+                        PeerEvent::Write((_payload, uuid)) => {
                             info!("[Downstream sink ORDER] Write -");
                             //todo check if it's paused
                             let downstream_message = prepare_downstream_sink_request(_payload);
