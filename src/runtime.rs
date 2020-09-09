@@ -1,7 +1,7 @@
 use crate::downstream::{
     DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventTxChannel, PeerHalve, PeerMetadata,
 };
-use crate::upstream_proto::{InputStreamRequest, OutputStreamRequest};
+use crate::upstream_proto::{Header, InputStreamRequest, OutputStreamRequest};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, oneshot, watch, Mutex};
 use uuid::Uuid;
 
 pub type PersistentMarkingLBRuntime = Arc<Mutex<Runtime>>;
@@ -34,11 +34,10 @@ pub enum RuntimeEvent {
     NoOrder,
     ShutdownPeer,
     PausePeer,
-    GotMessageFromUpstreamPeer(String),
-    GotMessageFromDownstream(String),
     PeerTerminatedConnection(PeerMetadata),
-    GetUpstreamPeer(tokio::sync::oneshot::Sender<Option<PeerEventTxChannel>>),
-    MessageToDownstreamPeer(OutputStreamRequest),
+    // GetUpstreamPeer(tokio::sync::oneshot::Sender<Option<PeerEventTxChannel>>),
+    MessageToDownstreamPeer(String, Header),
+    MessageToUpstreamPeer(String, String), //1st message && 2nd for uuid
 }
 
 #[derive(Debug)]
@@ -60,10 +59,12 @@ pub struct Runtime {
     pub peers_pool: Arc<Mutex<RuntimePeersPool>>,
 }
 
-enum RuntimeError {
+#[derive(Debug)]
+pub enum RuntimeError {
     PeerReferenceNotFound(PeerMetadata),
     PeerHalveDown(PeerMetadata),
     PeerChannelCommunicationError(PeerMetadata),
+    Closed,
 }
 
 impl Runtime {
@@ -115,14 +116,8 @@ impl Runtime {
                                 }
                                 self.handle_peer_termination(peer_metadata).await;
                             }
-                            RuntimeEvent::GotMessageFromUpstreamPeer(_) => {
-                                debug!("GotMessageFromUpstreamPeer")
-                            }
-                            RuntimeEvent::GotMessageFromDownstream(_) => {
-                                debug!("GotMessageFromDownstream")
-                            }
-                            RuntimeEvent::GetUpstreamPeer(oneshot_answer) => {
-                                debug!("GetUpstreamPeer order");
+                            RuntimeEvent::MessageToUpstreamPeer(payload, uuid) => {
+                                debug!("MessageToUpstreamPeer order");
                                 let upstreams = self.peers_pool.lock().await;
                                 let mut upstream_tx = Option::None;
                                 if !upstreams.upstream_peers_sink_tx.is_empty() {
@@ -130,26 +125,42 @@ impl Runtime {
                                     for upstream_tx_channel in
                                         upstreams.upstream_peers_sink_tx.iter()
                                     {
-                                        upstream_tx = Option::Some(upstream_tx_channel.1.clone());
+                                        upstream_tx = Option::Some((
+                                            upstream_tx_channel.0.clone(),
+                                            upstream_tx_channel.1.clone(),
+                                        ));
                                     }
                                 }
-                                match oneshot_answer.send(upstream_tx) {
-                                    Ok(_) => {
-                                        debug!("Successfully sent upstream peer tx");
+
+                                match upstream_tx {
+                                    Some((uuid, mut tx)) => {
+                                        let event =
+                                            PeerEvent::Write((payload, uuid.clone().to_string()));
+
+                                        if let Err(err) = tx.try_send(event) {
+                                            // try send_timeout looks better
+                                            warn!("[Failed to send message to the upstream [{:?}], veryfying why...", uuid.clone());
+                                            match err {
+                                                TrySendError::Closed(_) => {
+                                                    //should try another upstream peer to send the message
+                                                    error!("[Upstream peer [{:?}] has closed, cannot send, trying to send to another one]", uuid.clone());
+                                                }
+                                                TrySendError::Full(_) => {
+                                                    warn!("[Upstream peer [{:?}] channel is full, cannot send, retrying in few seconds]", uuid.clone());
+                                                }
+                                            }
+                                        }
                                     }
-                                    Err(err) => {
-                                        error!(
-                                            "Failed to send the upstream peer one short answer : {:?}",
-                                            err
-                                        );
+                                    None => {
+                                        warn!("[Failed to find an available upstream peer]");
                                     }
-                                };
+                                }
                             }
-                            RuntimeEvent::MessageToDownstreamPeer(metadata) => {
+                            RuntimeEvent::MessageToDownstreamPeer(payload, header) => {
                                 debug!("Runtime - MessageToDownstreamPeer order");
                                 debug!(
                                     "Trying to find the downstream peer with UUID [{:?}]",
-                                    metadata.header
+                                    header
                                 );
 
                                 let peers_pool = &*self.peers_pool.lock().await;
@@ -172,7 +183,8 @@ impl Runtime {
                                     debug!(
                                         "Sending the Writing order to the downstream peer [TODO PUT UUID of the client here]"
                                     );
-                                    let downstream_peer_event = PeerEvent::Write(metadata.payload);
+                                    let downstream_peer_event =
+                                        PeerEvent::Write((payload, header.client_uuid));
 
                                     if let Err(err) =
                                         downstream_peer.send(downstream_peer_event).await
@@ -180,6 +192,9 @@ impl Runtime {
                                         error!("Failed to send the Writing order to the downstream peer tx channel with UUID [{:?}]", err);
                                     }
                                 }
+                            }
+                            RuntimeEvent::MessageToUpstreamPeer(payload, uuid) => {
+                                debug!("[MessageToUpstreamPeer] Payload length [{}] && Header target client UUID [{}]", payload.len(), uuid.clone());
                             }
                         }
                     }
@@ -289,5 +304,24 @@ impl Runtime {
         locked_peers_pool
             .peers_addr_uuids
             .insert(metadata.socket_addr.clone(), metadata.uuid.clone());
+    }
+}
+
+pub async fn send_message_to_runtime(
+    mut runtime_tx: RuntimeOrderTxChannel,
+    metadata: PeerMetadata,
+    payload: RuntimeEvent,
+) -> Result<(), RuntimeError> {
+    //TODO better to send enum
+
+    if let Err(err) = runtime_tx.send(payload).await {
+        error!(
+            "Failed to send the order to the runtime [{:?}] from upstream [{}], terminating the upstream streaming runtime",
+            err,
+            metadata.uuid.clone()
+        );
+        Err(RuntimeError::Closed)
+    } else {
+        Ok(())
     }
 }

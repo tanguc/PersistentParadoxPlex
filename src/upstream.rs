@@ -2,7 +2,9 @@ use crate::downstream::{
     BoxError, PeerError, PeerEventRxChannel, PeerEventTxChannel, PeerHalve, PeerMetadata,
     PeerRuntime,
 };
-use crate::runtime::{PeerEvent, Runtime, RuntimeEvent, RuntimeOrderTxChannel};
+use crate::runtime::{
+    send_message_to_runtime, PeerEvent, Runtime, RuntimeEvent, RuntimeOrderTxChannel,
+};
 use crate::upstream_proto::{
     upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
     OutputStreamRequest, ReadyRequest, ReadyResult,
@@ -224,29 +226,10 @@ impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
     }
 }
 
-async fn send_message_to_runtime(
-    mut runtime_tx: RuntimeOrderTxChannel,
-    metadata: PeerMetadata,
-    payload: RuntimeEvent,
-) -> Result<(), UpstreamPeerError> {
-    //TODO better to send enum
-
-    if let Err(err) = runtime_tx.send(payload).await {
-        error!(
-            "Failed to send the order to the runtime [{:?}] from upstream [{}], terminating the upstream streaming runtime",
-            err,
-            metadata.uuid.clone()
-        );
-        Ok(())
-    } else {
-        Err(UpstreamPeerError::RuntimeClosed)
-    }
-}
-
 async fn upstream_start_stream_runtime(
     metadata: PeerMetadata,
     mut rx: PeerEventRxChannel,
-    mut runtime_tx: RuntimeOrderTxChannel,
+    runtime_tx: RuntimeOrderTxChannel,
     mut bi_stream_rx: tonic::codec::Streaming<OutputStreamRequest>,
 ) {
     let mut paused = false;
@@ -255,7 +238,7 @@ async fn upstream_start_stream_runtime(
     // <bool>true is returned if the runtime has closed or if the upstream should close (order coming from runtime)
     let runtime_order_resolution = enclose!(
         (mut runtime_tx, metadata)
-        move |runtime_order: Option<PeerEvent<String>>, paused: &mut bool| -> Result<(), UpstreamPeerError> {
+        move |runtime_order: Option<PeerEvent<(String, String)>>, paused: &mut bool| -> Result<(), UpstreamPeerError> {
         if let Some(order) = runtime_order {
             trace!("Received runtime order [{:?}] for upstream stream [{}]", order, metadata.uuid.clone());
             match order {
@@ -283,7 +266,7 @@ async fn upstream_start_stream_runtime(
 
     let stream_resolution = enclose!(
             (metadata)
-            move |bi_stream_rx_resp: Result<Option<OutputStreamRequest>, Status>, mut runtime_tx: RuntimeOrderTxChannel| {
+            move |bi_stream_rx_resp: Result<Option<OutputStreamRequest>, Status>, runtime_tx: RuntimeOrderTxChannel| {
                 let metadata = metadata.clone();
                 async move {
                     debug!("[Resolution of received message...]");
@@ -317,7 +300,7 @@ async fn upstream_start_stream_runtime(
                                 err.code() as u8,
                                 err
                             );
-                            let runtime_event = RuntimeEvent::UptreamPeerStatusFail(metadata.clone());
+                            let runtime_event = RuntimeEvent::PeerTerminatedConnection(metadata.clone());
                             send_message_to_runtime(runtime_tx, metadata, runtime_event).await
                         }
                     }
@@ -383,13 +366,16 @@ async fn upstream_start_sink_runtime(
                             metadata.uuid.clone()
                         );
                     }
-                    PeerEvent::Write(data) => {
+                    PeerEvent::Write((payload, uuid)) => {
                         debug!("[Upstream Write Event]");
                         if !paused {
                             //TODO would be much better to change the state of the sink loop
-                            let size = data.len();
+                            let size = payload.len();
                             //TODO would be better to trace only with cfg(debug) mode
-                            match bi_stream_tx.send(prepare_upstream_sink_request(data)).await {
+                            match bi_stream_tx
+                                .send(prepare_upstream_sink_request(payload, uuid))
+                                .await
+                            {
                                 Ok(_) => {
                                     trace!(
                                         "Wrote data of length [{}] to the client [{}]",
@@ -540,13 +526,13 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     upstream_peers
 }
 
-pub fn prepare_upstream_sink_request(payload: String) -> InputStreamRequest {
+pub fn prepare_upstream_sink_request(payload: String, uuid: String) -> InputStreamRequest {
     let address = String::from("127.0.0.1");
     let time = String::from("14:12:44");
 
     let request = InputStreamRequest {
         header: Option::Some(Header {
-            client_uuid: String::from("totoierz"), //TODO change it correctly ....
+            client_uuid: uuid, //TODO change it correctly ....
             address,
             time,
         }),
