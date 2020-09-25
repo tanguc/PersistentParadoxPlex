@@ -6,6 +6,7 @@ extern crate tokio;
 extern crate tokio_util;
 #[macro_use]
 extern crate log;
+extern crate anyhow;
 extern crate enclose;
 extern crate uuid;
 
@@ -15,6 +16,7 @@ pub mod upstream;
 pub mod upstream_proto;
 pub mod utils;
 use crate::runtime::PeerEvent;
+use anyhow::{anyhow, Result};
 use downstream::{DownstreamPeer, PeerEventTxChannel, PeerRuntime};
 use futures::StreamExt;
 use runtime::Runtime;
@@ -91,9 +93,48 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
     }
 }
 
+fn init_logging() -> anyhow::Result<()> {
+    let debug_level;
+    if let Some(env_var_level) = std::env::var_os("RUST_LOG") {
+        debug_level = env_var_level;
+    } else {
+        debug_level = "INFO".into();
+    }
+
+    if let Ok(debug_level) = debug_level.into_string() {
+        let env_filter = tracing_subscriber::EnvFilter::try_new(format!(
+            "persistent_marking_lb={}",
+            debug_level.clone()
+        ));
+        match env_filter {
+            Ok(filter) => {
+                tracing_subscriber::fmt()
+                    .with_env_filter(filter)
+                    .try_init()
+                    .map_err(|err| {
+                        eprintln!("Failed to init with env filter, aborting: {:?}", err);
+                        anyhow!(err)
+                    })?;
+                println!("installed");
+                Ok(())
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+                eprintln!("Failed to parse filters for tracing/logging");
+                eprintln!("persistent_marking_lb={}", debug_level.clone());
+                Ok(())
+            }
+        }
+    } else {
+        let err = String::from("Can't convert OS string");
+        eprintln!("Error: {}", err.clone());
+        Err(anyhow!(err))
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    pretty_env_logger::init();
+    init_logging().unwrap();
 
     // Uncomment only to compile protos
     // upstream_proto::compile_protos();
@@ -124,7 +165,7 @@ async fn main() {
                 }
             },
             Err(_) => {
-                error!("Cannot TCP listen");
+                error!("Failed to bind the TCP connection");
             }
         }
     };

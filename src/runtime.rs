@@ -206,8 +206,8 @@ impl Runtime {
                     }
                 }
             }
+            debug!("Dropping the runtime task");
         };
-        debug!("Dropping the runtime task");
 
         tokio::task::spawn(runtime_task);
     }
