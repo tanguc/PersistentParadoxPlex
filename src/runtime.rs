@@ -117,10 +117,9 @@ impl Runtime {
                                     self.remove_upstream_peer(peer_metadata.clone()).await
                                 {
                                     if let Some(peer_sink_tx) = upstream_peer.0 {
-                                        send_termination_peer(peer_metadata, peer_sink_tx);
+                                        let _ = send_termination_peer(peer_metadata, peer_sink_tx);
                                     }
                                 }
-                                unimplemented!();
                             }
                             /// Only for STREAM runtime of downstream peers
                             RuntimeEvent::DownstreamPeerTerminatedConnection(peer_metadata) => {
@@ -133,7 +132,7 @@ impl Runtime {
                                     self.remove_downstream_peer(peer_metadata.clone()).await
                                 {
                                     if let Some(peer_sink_tx) = downstream_peer.0 {
-                                        send_termination_peer(peer_metadata, peer_sink_tx);
+                                        let _ = send_termination_peer(peer_metadata, peer_sink_tx);
                                     }
                                 }
                             }

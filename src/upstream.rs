@@ -266,47 +266,30 @@ async fn upstream_start_stream_runtime(
 
     let stream_resolution = enclose!(
             (metadata)
-            move |bi_stream_rx_resp: Result<Option<OutputStreamRequest>, Status>, runtime_tx: RuntimeOrderTxChannel| {
+            move |bi_stream_rx_resp: Option<OutputStreamRequest>, runtime_tx: RuntimeOrderTxChannel| {
                 let metadata = metadata.clone();
                 async move {
-                    debug!("[Resolution of received message...]");
-
-                    match bi_stream_rx_resp {
-                        Ok(stream_res) => {
-                            if let Some(req_message) = stream_res {
-                                trace!(
-                                    "Upstream[{}] - message [{:?}]",
-                                    metadata.uuid.clone(),
-                                    req_message
-                                );
-                                if let Some(header) = req_message.header {
-                                    let runtime_event = RuntimeEvent::MessageFromDownstreamPeer(req_message.payload, header);
-                                    send_message_to_runtime(runtime_tx, metadata, runtime_event)
-                                    .await
-                                    .map_err(|err| () )
-                                } else {
-                                    warn!(
-                                        "Upstream stream [{:?}] did not send any header in the message, skipping...",
-                                        metadata.uuid.clone()
-                                    );
-                                    Ok(())
-                                }
-                            } else {
-                                error!("Received NONE from upstream, weird, please contact the developer");
-                                Ok(())
-                            }
-                        }
-                        Err(err) => {
+                    if let Some(req_message) = bi_stream_rx_resp {
+                        trace!(
+                            "Upstream[{}] - message [{:?}]",
+                            metadata.uuid.clone(),
+                            req_message
+                        );
+                        if let Some(header) = req_message.header {
+                            let runtime_event = RuntimeEvent::MessageFromDownstreamPeer(req_message.payload, header);
+                            send_message_to_runtime(runtime_tx, metadata, runtime_event)
+                            .await
+                            .map_err(|err| () )
+                        } else {
                             warn!(
-                                "Failed to read from upstream && error code [{:?}] && error [{:?}] && details [{:?}]",
-                                err.code() as u8,
-                                err,
-                                err.details()
+                                "Upstream stream [{:?}] did not send any header in the message, skipping...",
+                                metadata.uuid.clone()
                             );
-                            let runtime_event = RuntimeEvent::UpstreamPeerTerminatedConnection(metadata.clone());
-                            let _ = send_message_to_runtime(runtime_tx, metadata, runtime_event).await;
-                            Err(())
+                            Ok(())
                         }
+                    } else {
+                        error!("Received NONE from upstream, weird, resuming the runtime, please contact the developer");
+                        Ok(())
                     }
                 }
             }
@@ -322,11 +305,28 @@ async fn upstream_start_stream_runtime(
                     abort = true;
                 }
             },
-            stream_resp = (bi_stream_rx.message()) => {
+            stream_result = (bi_stream_rx.message()) => {
                 debug!("[Upstream stream runtime] got line");
-                if let Err(err) = stream_resolution(stream_resp, runtime_tx.clone()).await {
-                    error!("[Aborting Upstream [{:?}] stream runtime, cause [{:?}]", metadata.uuid.clone(), err);
-                    abort = true;
+                match stream_result {
+                    Ok(message) => {
+                        if let Err(_) =  stream_resolution(message, runtime_tx.clone()).await {
+                            warn!("Aborting Upstream [{:?}] stream runtime", metadata.uuid.clone());
+                            abort = true;
+                        }
+                    }
+                    Err(err) => {
+                        debug!(
+                            "Failed to read from upstream && error code [{:?}] && error [{:?}] && details [{:?}]",
+                            err.code() as u8,
+                            err,
+                            err.details()
+                        );
+                        let runtime_event = RuntimeEvent::UpstreamPeerTerminatedConnection(metadata.clone());
+                        let _ = send_message_to_runtime(runtime_tx.clone(), metadata.clone(), runtime_event).await;
+
+                        warn!("Aborting Upstream [{:?}] stream runtime, cause [{:?}]", metadata.uuid.clone(), err);
+                        abort = true;
+                    }
                 }
             }
         }
