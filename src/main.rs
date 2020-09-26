@@ -103,7 +103,7 @@ fn init_logging() -> anyhow::Result<()> {
 
     if let Ok(debug_level) = debug_level.into_string() {
         let env_filter = tracing_subscriber::EnvFilter::try_new(format!(
-            "persistent_marking_lb={}",
+            "persistent_marking_lb={},tonic=trace",
             debug_level.clone()
         ));
         match env_filter {

@@ -214,7 +214,7 @@ impl DownstreamPeerStreamHalve {
                     Some(line) => match line {
                         Ok(line) => {
                             debug!("Got a new line : {:?}", line);
-                            let runtime_event = RuntimeEvent::MessageToUpstreamPeer(
+                            let runtime_event = RuntimeEvent::MessageFromUpstreamPeer(
                                 line,
                                 self.halve.metadata.uuid.clone().to_string(),
                             );
@@ -248,8 +248,9 @@ impl DownstreamPeerStreamHalve {
                     },
                     None => {
                         debug!("[Peer terminated connection] notifying runtime");
-                        let runtime_event =
-                            RuntimeEvent::PeerTerminatedConnection(self.halve.metadata.clone());
+                        let runtime_event = RuntimeEvent::DownstreamPeerTerminatedConnection(
+                            self.halve.metadata.clone(),
+                        );
                         if let Err(err) = send_message_to_runtime(
                             self.halve.runtime_tx.clone(),
                             self.halve.metadata.clone(),
@@ -257,9 +258,9 @@ impl DownstreamPeerStreamHalve {
                         )
                         .await
                         {
-                            error!("[Failed to send message to runtime], aborting because peer has terminated");
-                            break;
+                            error!("[Failed to send message to runtime], aborting anyway...");
                         }
+                        break;
                     }
                 }
             }

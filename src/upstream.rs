@@ -280,8 +280,10 @@ async fn upstream_start_stream_runtime(
                                     req_message
                                 );
                                 if let Some(header) = req_message.header {
-                                    let runtime_event = RuntimeEvent::MessageToDownstreamPeer(req_message.payload, header);
-                                    send_message_to_runtime(runtime_tx, metadata, runtime_event).await
+                                    let runtime_event = RuntimeEvent::MessageFromDownstreamPeer(req_message.payload, header);
+                                    send_message_to_runtime(runtime_tx, metadata, runtime_event)
+                                    .await
+                                    .map_err(|err| () )
                                 } else {
                                     warn!(
                                         "Upstream stream [{:?}] did not send any header in the message, skipping...",
@@ -296,12 +298,14 @@ async fn upstream_start_stream_runtime(
                         }
                         Err(err) => {
                             warn!(
-                                "Failed to read from upstream && error code [{:?}] && error [{:?}",
+                                "Failed to read from upstream && error code [{:?}] && error [{:?}] && details [{:?}]",
                                 err.code() as u8,
-                                err
+                                err,
+                                err.details()
                             );
-                            let runtime_event = RuntimeEvent::PeerTerminatedConnection(metadata.clone());
-                            send_message_to_runtime(runtime_tx, metadata, runtime_event).await
+                            let runtime_event = RuntimeEvent::UpstreamPeerTerminatedConnection(metadata.clone());
+                            let _ = send_message_to_runtime(runtime_tx, metadata, runtime_event).await;
+                            Err(())
                         }
                     }
                 }
@@ -401,7 +405,11 @@ async fn upstream_start_sink_runtime(
                 }
             }
             None => {
-                warn!("Failed to receive an order from runtime");
+                error!(
+                    "All tx pipelines for my peer [{:?}] have been dropped, aborting.",
+                    metadata.uuid
+                );
+                return;
             }
         }
     }

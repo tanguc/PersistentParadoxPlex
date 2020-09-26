@@ -1,5 +1,6 @@
 use crate::downstream::{
-    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventTxChannel, PeerHalve, PeerMetadata,
+    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventRxChannel, PeerEventTxChannel,
+    PeerHalve, PeerMetadata,
 };
 use crate::upstream_proto::{Header, InputStreamRequest, OutputStreamRequest};
 
@@ -21,7 +22,7 @@ pub type RuntimeOrderRxChannel = watch::Receiver<RuntimeEvent>;
 type RuntimeResult<T> = Result<T, RuntimeError>;
 
 #[derive(Debug, PartialEq)]
-pub enum PeerEvent<T> {
+pub enum PeerEvent<T = ()> {
     Start,
     Pause,
     Stop,
@@ -34,10 +35,11 @@ pub enum RuntimeEvent {
     NoOrder,
     ShutdownPeer,
     PausePeer,
-    PeerTerminatedConnection(PeerMetadata),
+    DownstreamPeerTerminatedConnection(PeerMetadata),
+    UpstreamPeerTerminatedConnection(PeerMetadata),
     // GetUpstreamPeer(tokio::sync::oneshot::Sender<Option<PeerEventTxChannel>>),
-    MessageToDownstreamPeer(String, Header),
-    MessageToUpstreamPeer(String, String), //1st message && 2nd for uuid
+    MessageFromDownstreamPeer(String, Header),
+    MessageFromUpstreamPeer(String, String), //1st message && 2nd for uuid
 }
 
 #[derive(Debug)]
@@ -94,30 +96,49 @@ impl Runtime {
                         info!("Got order from a client");
                         match runtime_event {
                             RuntimeEvent::NoOrder => {
-                                debug!("NoOrder");
+                                debug!("NO ORDER");
+                                unimplemented!();
                             }
                             RuntimeEvent::ShutdownPeer => {
-                                debug!("Peer shutdown");
+                                debug!("SHUTDOWN ORDER");
+                                unimplemented!();
                             }
                             RuntimeEvent::PausePeer => {
-                                debug!("Peer paused");
+                                debug!("PAUSE ORDER");
+                                unimplemented!();
                             }
-                            RuntimeEvent::PeerTerminatedConnection(peer_metadata) => {
+                            /// Only for STREAM runtime of upstream peers
+                            RuntimeEvent::UpstreamPeerTerminatedConnection(peer_metadata) => {
+                                debug!(
+                                    "TERMINATION ORDER - UPSTREAM PEER [{:?}]",
+                                    peer_metadata.uuid.clone()
+                                );
+                                if let Ok(upstream_peer) =
+                                    self.remove_upstream_peer(peer_metadata.clone()).await
                                 {
-                                    let scope_lock = self.peers_pool.lock().await;
-                                    debug!(
-                                        "Before termination hashmap: \n\
-                                    {:?}\
-                                    \n\
-                                    {:?}",
-                                        scope_lock.downstream_peers_stream_tx,
-                                        scope_lock.downstream_peers_sink_tx,
-                                    );
+                                    if let Some(peer_sink_tx) = upstream_peer.0 {
+                                        send_termination_peer(peer_metadata, peer_sink_tx);
+                                    }
                                 }
-                                self.handle_peer_termination(peer_metadata).await;
+                                unimplemented!();
                             }
-                            RuntimeEvent::MessageToUpstreamPeer(payload, uuid) => {
-                                debug!("MessageToUpstreamPeer order");
+                            /// Only for STREAM runtime of downstream peers
+                            RuntimeEvent::DownstreamPeerTerminatedConnection(peer_metadata) => {
+                                debug!(
+                                    "TERMINATION ORDER - DOWNSTREAM PEER [{:?}]",
+                                    peer_metadata.uuid.clone()
+                                );
+
+                                if let Ok(downstream_peer) =
+                                    self.remove_downstream_peer(peer_metadata.clone()).await
+                                {
+                                    if let Some(peer_sink_tx) = downstream_peer.0 {
+                                        send_termination_peer(peer_metadata, peer_sink_tx);
+                                    }
+                                }
+                            }
+                            RuntimeEvent::MessageFromUpstreamPeer(payload, uuid) => {
+                                debug!("MESSAGE TO UPSTREAM PEER ORDER");
                                 let upstreams = self.peers_pool.lock().await;
                                 let mut upstream_tx = Option::None;
                                 if !upstreams.upstream_peers_sink_tx.is_empty() {
@@ -156,8 +177,8 @@ impl Runtime {
                                     }
                                 }
                             }
-                            RuntimeEvent::MessageToDownstreamPeer(payload, header) => {
-                                debug!("Runtime - MessageToDownstreamPeer order");
+                            RuntimeEvent::MessageFromDownstreamPeer(payload, header) => {
+                                debug!("MESSAGE TO DOWNSTREAM PEER ORDER");
                                 debug!(
                                     "Trying to find the downstream peer with UUID [{:?}]",
                                     header
@@ -193,7 +214,7 @@ impl Runtime {
                                     }
                                 }
                             }
-                            RuntimeEvent::MessageToUpstreamPeer(payload, uuid) => {
+                            RuntimeEvent::MessageFromUpstreamPeer(payload, uuid) => {
                                 debug!("[MessageToUpstreamPeer] Payload length [{}] && Header target client UUID [{}]", payload.len(), uuid.clone());
                             }
                         }
@@ -212,6 +233,38 @@ impl Runtime {
         tokio::task::spawn(runtime_task);
     }
 
+    async fn remove_upstream_peer(
+        &mut self,
+        peer_metadata: PeerMetadata,
+    ) -> RuntimeResult<(Option<PeerEventTxChannel>, Option<PeerEventTxChannel>)> {
+        let mut locked_peers_pool = self.peers_pool.lock().await;
+
+        let peer_sink_tx;
+        let peer_stream_tx;
+
+        if locked_peers_pool
+            .upstream_peers_sink_tx
+            .contains_key(&peer_metadata.uuid)
+            && locked_peers_pool
+                .upstream_peers_sink_tx
+                .contains_key(&peer_metadata.uuid)
+        {
+            peer_sink_tx = locked_peers_pool
+                .upstream_peers_sink_tx
+                .remove(&peer_metadata.uuid);
+            peer_stream_tx = locked_peers_pool
+                .upstream_peers_stream_tx
+                .remove(&peer_metadata.uuid);
+            Ok((peer_sink_tx, peer_stream_tx))
+        } else {
+            warn!(
+                "Failed to find and remove the upstream peer [{:?}]",
+                peer_metadata.clone()
+            );
+            Err(RuntimeError::PeerReferenceNotFound(peer_metadata.clone()))
+        }
+    }
+
     /// Remove reference of the front peer
     /// and returns the Sender channels of each tasks related to (Sink &
     /// Stream)
@@ -221,8 +274,17 @@ impl Runtime {
     ) -> RuntimeResult<(Option<PeerEventTxChannel>, Option<PeerEventTxChannel>)> {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
+        trace!(
+            "Before termination hashmap: \n\
+        {:?}\
+        \n\
+        {:?}",
+            locked_peers_pool.downstream_peers_stream_tx,
+            locked_peers_pool.downstream_peers_sink_tx,
+        );
+
         let peer_sink_tx;
-        let peer_stream_txt;
+        let peer_stream_tx;
         if locked_peers_pool
             .downstream_peers_sink_tx
             .contains_key(&peer_metadata.uuid)
@@ -233,37 +295,17 @@ impl Runtime {
             peer_sink_tx = locked_peers_pool
                 .downstream_peers_sink_tx
                 .remove(&peer_metadata.uuid);
-            peer_stream_txt = locked_peers_pool
+            peer_stream_tx = locked_peers_pool
                 .downstream_peers_stream_tx
                 .remove(&peer_metadata.uuid);
-            Ok((peer_sink_tx, peer_stream_txt))
+            Ok((peer_sink_tx, peer_stream_tx))
         } else {
             warn!(
-                "The sink or stream channels have not been found for the \
-                    following peer: {}",
+                "Failed to find and remove the downstream peer [{:?}]",
                 peer_metadata
             );
             Err(RuntimeError::PeerReferenceNotFound(peer_metadata))
         }
-    }
-
-    /// When a peer is down (notified from stream halve usually)
-    /// Notifying the sink halve to stop right now his runtime
-    async fn handle_peer_termination(&mut self, peer_metadata: PeerMetadata) -> RuntimeResult<()> {
-        debug!("Handle peer terminated connection");
-
-        let (peer_sink_tx, _) = self.remove_downstream_peer(peer_metadata.clone()).await?;
-        let mut peer_sink_tx =
-            peer_sink_tx.ok_or(RuntimeError::PeerHalveDown(peer_metadata.clone()))?;
-
-        peer_sink_tx.send(PeerEvent::Stop).await.map_err(|_| {
-            error!(
-                "Cannot send a termination order to the sink task \
-                    of the peer : {}",
-                peer_metadata
-            );
-            RuntimeError::PeerChannelCommunicationError(peer_metadata.clone())
-        })
     }
 
     pub async fn add_upstream_peer_halves(
@@ -305,6 +347,31 @@ impl Runtime {
             .peers_addr_uuids
             .insert(metadata.socket_addr.clone(), metadata.uuid.clone());
     }
+}
+
+/// New task which will try to send the STOP order to the given peer
+/// Runtime don't care anymore about this peer because it's not more referenced by this last
+async fn send_termination_peer(peer_metadata: PeerMetadata, mut peer_tx: PeerEventTxChannel) {
+    let task = async move {
+        trace!(
+            "Sending termination for the peer [{:?}]",
+            peer_metadata.clone()
+        );
+
+        let stop_order: PeerEvent<()> = PeerEvent::Stop;
+        if let Err(peer_tx_err) = peer_tx.send(PeerEvent::Stop).await {
+            error!(
+                "Failed to send stop order to peer [{}]",
+                peer_metadata.clone()
+            );
+            Err(RuntimeError::PeerChannelCommunicationError(
+                peer_metadata.clone(),
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    tokio::spawn(task);
 }
 
 pub async fn send_message_to_runtime(
