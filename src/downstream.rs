@@ -1,61 +1,30 @@
 use crate::{
+    runtime::PeerEventRxChannel,
+    runtime::PeerEventTxChannel,
     runtime::{
-        send_message_to_runtime, PeerEvent, RuntimeError, RuntimeEvent, RuntimeOrderTxChannel,
+        send_message_to_runtime, PeerEvent, PeerHalve, PeerMetadata, RuntimeError, RuntimeEvent,
+        RuntimeOrderTxChannel,
     },
     upstream_proto::{Header, InputStreamRequest},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use std::fmt::{Debug, Display, Error, Formatter};
-use std::net::SocketAddr;
+use std::{fmt::Formatter, net::SocketAddr};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
 
-pub type PeerEventTxChannel = mpsc::Sender<PeerEvent<(String, String)>>; // first param (payload) and second for uuid of the target peer
-pub type PeerEventRxChannel = mpsc::Receiver<PeerEvent<(String, String)>>;
-
-#[derive(Clone, PartialEq)]
-pub struct PeerMetadata {
-    pub uuid: Uuid,
-    pub socket_addr: SocketAddr,
-}
-
-impl Debug for PeerMetadata {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        f.debug_struct("PeerMetadata")
-            .field("uuid", &self.uuid)
-            .field("socket_addr", &self.socket_addr)
-            .finish()
-    }
-}
-
-impl Display for PeerMetadata {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        f.write_fmt(format_args!(
-            "Peer's metadata \
-            UUID: {}\
-            SocketAddr: {}",
-            self.uuid, self.socket_addr
-        ))
-    }
-}
-
-pub struct PeerHalve {
-    pub metadata: PeerMetadata,
-    pub runtime_tx: RuntimeOrderTxChannel,
-    pub rx: PeerEventRxChannel,
-    pub tx: PeerEventTxChannel,
-}
+pub type DownstreamPeerStreamChannelTx = PeerEventTxChannel<()>;
+pub type DownstreamPeerSinkChannelTx = PeerEventTxChannel<()>;
 
 pub struct DownstreamPeerSinkHalve {
-    halve: PeerHalve,
+    halve: PeerHalve<()>,
     tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
 }
 
 pub struct DownstreamPeerStreamHalve {
-    halve: PeerHalve,
+    halve: PeerHalve<()>,
     tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>,
 }
 
@@ -140,8 +109,8 @@ pub trait PeerRuntime {
 
 pub struct DownstreamPeerFinalState {
     pub metadata: PeerMetadata,
-    pub sink_tx: PeerEventTxChannel,
-    pub stream_tx: PeerEventTxChannel,
+    pub sink_tx: PeerEventTxChannel<()>,
+    pub stream_tx: PeerEventTxChannel<()>,
 }
 
 impl DownstreamPeerSinkHalve {
@@ -172,7 +141,7 @@ impl DownstreamPeerStreamHalve {
     }
 }
 
-impl PeerHalve {
+impl<T> PeerHalve<T> {
     pub fn new(uuid: Uuid, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
         let (tx, rx) = mpsc::channel(1000);
         PeerHalve {
@@ -201,7 +170,7 @@ impl PeerRuntime for DownstreamPeer {
 }
 
 impl DownstreamPeerStreamHalve {
-    fn start(mut self) -> PeerEventTxChannel {
+    fn start(mut self) -> PeerEventTxChannel<()> {
         let tx = self.halve.tx.clone();
         let task = move || async move {
             info!(
@@ -214,7 +183,7 @@ impl DownstreamPeerStreamHalve {
                     Some(line) => match line {
                         Ok(line) => {
                             debug!("Got a new line : {:?}", line);
-                            let runtime_event = RuntimeEvent::MessageFromUpstreamPeer(
+                            let runtime_event = RuntimeEvent::MessageFromDownstreamPeer(
                                 line,
                                 self.halve.metadata.uuid.clone().to_string(),
                             );
@@ -273,7 +242,7 @@ impl DownstreamPeerStreamHalve {
 }
 
 impl DownstreamPeerSinkHalve {
-    fn start(mut self) -> PeerEventTxChannel {
+    fn start(mut self) -> PeerEventTxChannel<()> {
         let tx = self.halve.tx.clone();
         let task = move || async move {
             info!(
@@ -292,7 +261,7 @@ impl DownstreamPeerSinkHalve {
                             paused = true;
                             info!("[Downstream sink ORDER] Pause -");
                         }
-                        PeerEvent::Write((_payload, uuid)) => {
+                        PeerEvent::Write((_payload, _)) => {
                             info!("[Downstream sink ORDER] Write -");
                             //todo check if it's paused
                             let downstream_message = prepare_downstream_sink_request(_payload);

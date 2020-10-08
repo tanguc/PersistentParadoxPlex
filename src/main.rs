@@ -17,9 +17,9 @@ pub mod upstream_proto;
 pub mod utils;
 use crate::runtime::PeerEvent;
 use anyhow::{anyhow, Result};
-use downstream::{DownstreamPeer, PeerEventTxChannel, PeerRuntime};
+use downstream::{DownstreamPeer, DownstreamPeerSinkChannelTx, PeerRuntime};
 use futures::StreamExt;
-use runtime::Runtime;
+use runtime::{PeerEventTxChannel, PeerMetadata, Runtime};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -28,19 +28,16 @@ use upstream::register_upstream_peers;
 
 /// should be in the downstream scope
 async fn dummy_task_for_writing_as_downstream_clients(
-    mut peer_sink_tx_channel: PeerEventTxChannel,
+    mut peer_sink_tx_channel: DownstreamPeerSinkChannelTx,
 ) {
-    info!("Starting the dummy data exchanger (to the sink peer)");
+    info!("Starting a dummy downstream client (sink)");
 
     let mut i = 0;
     loop {
         delay_for(Duration::from_secs(2)).await;
         let dummy_message = format!("DUMMY ANSWER {}", i);
         let res = peer_sink_tx_channel
-            .send(PeerEvent::Write((
-                dummy_message,
-                String::from("73928-329842-293842-23984823"),
-            )))
+            .send(PeerEvent::Write((dummy_message, ())))
             .await;
         debug!("Sent message from dummy, res : {:?}", res);
         i = i + 1;

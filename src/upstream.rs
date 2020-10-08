@@ -1,13 +1,17 @@
-use crate::downstream::{
-    BoxError, PeerError, PeerEventRxChannel, PeerEventTxChannel, PeerHalve, PeerMetadata,
-    PeerRuntime,
+use crate::{
+    downstream::PeerError,
+    runtime::{
+        send_message_to_runtime, PeerEvent, PeerEventTxChannel, PeerMetadata, Runtime,
+        RuntimeEvent, RuntimeOrderTxChannel,
+    },
 };
-use crate::runtime::{
-    send_message_to_runtime, PeerEvent, Runtime, RuntimeEvent, RuntimeOrderTxChannel,
-};
-use crate::upstream_proto::{
-    upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
-    OutputStreamRequest, ReadyRequest, ReadyResult,
+use crate::{downstream::PeerRuntime, runtime::PeerHalve};
+use crate::{
+    runtime::PeerEventRxChannel,
+    upstream_proto::{
+        upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
+        OutputStreamRequest, ReadyRequest, ReadyResult,
+    },
 };
 use async_trait::async_trait;
 use enclose::enclose;
@@ -18,6 +22,9 @@ use uuid::Uuid;
 
 type UpstreamPeerInputRequest = InputStreamRequest;
 type UpstreamPeerOuputRequest = OutputStreamRequest;
+
+pub type UpstreamPeerStreamChannelTx = PeerEventTxChannel<String>;
+pub type UpstreamPeerSinkChannelTx = PeerEventTxChannel<String>;
 
 pub enum UpstreamPeerMetadataError {
     HostInvalid,
@@ -34,22 +41,22 @@ pub enum UpstreamPeerError {
 }
 
 pub struct UpstreamPeerPending {
-    pub stream_halve: PeerHalve,
-    pub sink_halve: PeerHalve,
+    pub stream_halve: PeerHalve<String>,
+    pub sink_halve: PeerHalve<String>,
 }
 
 /// Once the client has passed the Ready request of gRPC
 pub struct UpstreamPeerWaitReadiness {
-    pub stream_halve: PeerHalve,
-    pub sink_halve: PeerHalve,
+    pub stream_halve: PeerHalve<String>,
+    pub sink_halve: PeerHalve<String>,
     pub client: UpstreamPeerServiceClient<tonic::transport::Channel>,
 }
 
 type UpstreamBiStreamingSender = tokio::sync::mpsc::Sender<UpstreamPeerInputRequest>;
 
 pub struct UpstreamPeerReady {
-    pub stream_halve: PeerHalve,
-    pub sink_halve: PeerHalve,
+    pub stream_halve: PeerHalve<String>,
+    pub sink_halve: PeerHalve<String>,
     pub client: UpstreamPeerServiceClient<tonic::transport::Channel>, // useful to receive data
 }
 
@@ -101,7 +108,11 @@ impl UpstreamPeerStateTransition for UpstreamPeerWaitReadiness {
     type NextState = UpstreamPeerReady;
     async fn next(mut self) -> Option<Self::NextState> {
         let ready_req = tonic::Request::new(ReadyRequest {
-            header: None,
+            header: Some(Header {
+                address: "127.0.0.1".into(),
+                client_uuid: "NIL".into(),
+                time: "21:23:12".into(),
+            }),
             ready: String::from("false"),
         });
 
@@ -147,8 +158,8 @@ impl UpstreamPeer<UpstreamPeerPending> {
 }
 
 pub struct UpstreamPeerStarted {
-    pub sink_tx: PeerEventTxChannel,
-    pub stream_tx: PeerEventTxChannel,
+    pub sink_tx: PeerEventTxChannel<String>,
+    pub stream_tx: PeerEventTxChannel<String>,
     pub metadata: PeerMetadata,
 }
 
@@ -228,7 +239,7 @@ impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
 
 async fn upstream_start_stream_runtime(
     metadata: PeerMetadata,
-    mut rx: PeerEventRxChannel,
+    mut rx: PeerEventRxChannel<String>,
     runtime_tx: RuntimeOrderTxChannel,
     mut bi_stream_rx: tonic::codec::Streaming<OutputStreamRequest>,
 ) {
@@ -276,7 +287,7 @@ async fn upstream_start_stream_runtime(
                             req_message
                         );
                         if let Some(header) = req_message.header {
-                            let runtime_event = RuntimeEvent::MessageFromDownstreamPeer(req_message.payload, header);
+                            let runtime_event = RuntimeEvent::MessageFromUpstreamPeer(req_message.payload, header.client_uuid.clone());
                             send_message_to_runtime(runtime_tx, metadata, runtime_event)
                             .await
                             .map_err(|err| () )
@@ -337,7 +348,7 @@ async fn upstream_start_stream_runtime(
 async fn upstream_start_sink_runtime(
     metadata: PeerMetadata,
     runtime_tx: RuntimeOrderTxChannel,
-    mut rx: PeerEventRxChannel,
+    mut rx: PeerEventRxChannel<String>,
     mut bi_stream_tx: UpstreamBiStreamingSender,
 ) {
     debug!("[Starting upstream sink runtime]");
@@ -370,14 +381,17 @@ async fn upstream_start_sink_runtime(
                             metadata.uuid.clone()
                         );
                     }
-                    PeerEvent::Write((payload, uuid)) => {
+                    PeerEvent::Write((payload, downstream_uuid)) => {
                         debug!("[Upstream Write Event]");
                         if !paused {
                             //TODO would be much better to change the state of the sink loop
                             let size = payload.len();
                             //TODO would be better to trace only with cfg(debug) mode
                             match bi_stream_tx
-                                .send(prepare_upstream_sink_request(payload, uuid))
+                                .send(prepare_upstream_sink_request(
+                                    payload,
+                                    downstream_uuid.clone(),
+                                ))
                                 .await
                             {
                                 Ok(_) => {
@@ -406,7 +420,7 @@ async fn upstream_start_sink_runtime(
             }
             None => {
                 error!(
-                    "All tx pipelines for my peer [{:?}] have been dropped, aborting.",
+                    "All tx pipelines (sink) for my peer [{:?}] have been dropped, aborting.",
                     metadata.uuid
                 );
                 return;
@@ -415,7 +429,7 @@ async fn upstream_start_sink_runtime(
     }
 }
 
-// ///should be in the runtime
+/// should be in the runtime
 /// Register all upstream peers from a source
 /// All wrapped into a separate task
 /// Each upstream peer initialization are also wrapped into a different task
@@ -523,7 +537,7 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     let mut upstream_peers = vec![];
 
     upstream_peers.push(UpstreamPeerMetadata {
-        host: "127.0.0.1:4770"
+        host: "127.0.0.1:45888"
             .parse()
             .map_err(|err| {
                 error!("Could not parse addr: [{:?}]", err);

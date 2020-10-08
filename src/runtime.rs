@@ -1,16 +1,15 @@
-use crate::downstream::{
-    DownstreamPeerSinkHalve, DownstreamPeerStreamHalve, PeerEventRxChannel, PeerEventTxChannel,
-    PeerHalve, PeerMetadata,
+use crate::downstream::{DownstreamPeerSinkChannelTx, DownstreamPeerStreamChannelTx};
+use crate::{
+    upstream::{UpstreamPeerSinkChannelTx, UpstreamPeerStreamChannelTx},
+    upstream_proto::Header,
 };
-use crate::upstream_proto::{Header, InputStreamRequest, OutputStreamRequest};
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::fmt::{Debug, Display, Error, Formatter};
+use std::{collections::HashMap, net::SocketAddr};
 
-use std::fmt::Debug;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, mpsc::error::TrySendError, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, watch, Mutex};
 use uuid::Uuid;
 
 pub type PersistentMarkingLBRuntime = Arc<Mutex<Runtime>>;
@@ -38,21 +37,57 @@ pub enum RuntimeEvent {
     DownstreamPeerTerminatedConnection(PeerMetadata),
     UpstreamPeerTerminatedConnection(PeerMetadata),
     // GetUpstreamPeer(tokio::sync::oneshot::Sender<Option<PeerEventTxChannel>>),
-    MessageFromDownstreamPeer(String, Header),
-    MessageFromUpstreamPeer(String, String), //1st message && 2nd for uuid
+    MessageFromDownstreamPeer(String, String), // .1 uuid of the incoming downstream client
+    MessageFromUpstreamPeer(String, String),   // .1 uuid of the target downstream client
 }
 
 #[derive(Debug)]
 pub struct RuntimePeersPool {
     // Used only for runtime orders
-    pub downstream_peers_stream_tx: HashMap<Uuid, PeerEventTxChannel>,
-    pub upstream_peers_stream_tx: HashMap<Uuid, PeerEventTxChannel>,
+    pub downstream_peers_stream_tx: HashMap<Uuid, DownstreamPeerStreamChannelTx>,
+    pub upstream_peers_stream_tx: HashMap<Uuid, UpstreamPeerStreamChannelTx>,
 
     // Used to send data to write
-    pub downstream_peers_sink_tx: HashMap<Uuid, PeerEventTxChannel>,
-    pub upstream_peers_sink_tx: HashMap<Uuid, PeerEventTxChannel>,
+    pub downstream_peers_sink_tx: HashMap<Uuid, DownstreamPeerSinkChannelTx>,
+    pub upstream_peers_sink_tx: HashMap<Uuid, UpstreamPeerSinkChannelTx>,
 
     pub peers_addr_uuids: HashMap<SocketAddr, Uuid>,
+}
+
+pub type PeerEventTxChannel<T> = mpsc::Sender<PeerEvent<(String, T)>>; // first param (payload) and second for uuid of the target peer
+pub type PeerEventRxChannel<T> = mpsc::Receiver<PeerEvent<(String, T)>>;
+
+pub struct PeerHalve<T> {
+    pub metadata: PeerMetadata,
+    pub runtime_tx: RuntimeOrderTxChannel,
+    pub rx: PeerEventRxChannel<T>,
+    pub tx: PeerEventTxChannel<T>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct PeerMetadata {
+    pub uuid: Uuid,
+    pub socket_addr: SocketAddr,
+}
+
+impl Debug for PeerMetadata {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.debug_struct("PeerMetadata")
+            .field("uuid", &self.uuid)
+            .field("socket_addr", &self.socket_addr)
+            .finish()
+    }
+}
+
+impl Display for PeerMetadata {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.write_fmt(format_args!(
+            "Peer's metadata \
+            UUID: {}\
+            SocketAddr: {}",
+            self.uuid, self.socket_addr
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -131,13 +166,14 @@ impl Runtime {
                                 if let Ok(downstream_peer) =
                                     self.remove_downstream_peer(peer_metadata.clone()).await
                                 {
+                                    trace!("TERMINATION ORDER - Upstream [{:?}] found, sending termination", peer_metadata.uuid.clone());
                                     if let Some(peer_sink_tx) = downstream_peer.0 {
                                         let _ = send_termination_peer(peer_metadata, peer_sink_tx);
                                     }
                                 }
                             }
-                            RuntimeEvent::MessageFromUpstreamPeer(payload, uuid) => {
-                                debug!("MESSAGE TO UPSTREAM PEER ORDER");
+                            RuntimeEvent::MessageFromDownstreamPeer(payload, uuid) => {
+                                debug!("ORDER - MESSAGE FROM DOWNSTREAM PEER");
                                 let upstreams = self.peers_pool.lock().await;
                                 let mut upstream_tx = Option::None;
                                 if !upstreams.upstream_peers_sink_tx.is_empty() {
@@ -153,7 +189,12 @@ impl Runtime {
                                 }
 
                                 match upstream_tx {
-                                    Some((uuid, mut tx)) => {
+                                    Some((_, mut tx)) => {
+                                        let _ = Header {
+                                            address: "127.0.0.1".into(), // TODO fill with the current host address
+                                            client_uuid: uuid.clone().to_string(), //
+                                            time: "03:53:39".into(),     // TODO current time
+                                        };
                                         let event =
                                             PeerEvent::Write((payload, uuid.clone().to_string()));
 
@@ -176,45 +217,25 @@ impl Runtime {
                                     }
                                 }
                             }
-                            RuntimeEvent::MessageFromDownstreamPeer(payload, header) => {
-                                debug!("MESSAGE TO DOWNSTREAM PEER ORDER");
+                            RuntimeEvent::MessageFromUpstreamPeer(payload, uuid) => {
+                                debug!("ORDER - MESSAGE FROM UPSTREAM PEER ORDER");
                                 debug!(
                                     "Trying to find the downstream peer with UUID [{:?}]",
-                                    header
+                                    uuid.clone()
                                 );
-
-                                let peers_pool = &*self.peers_pool.lock().await;
-                                let mut downstream_peer = Option::None;
-                                // TODO should be choosen by uuid and not randomly
-                                if !peers_pool.downstream_peers_sink_tx.is_empty() {
-                                    for downstream_peer_sink_tx in
-                                        peers_pool.downstream_peers_sink_tx.iter()
-                                    {
-                                        downstream_peer =
-                                            Option::Some(downstream_peer_sink_tx.1.clone());
-                                    }
-                                } else {
-                                    error!(
-                                        "No downstream peer has been found for the UUID [TODO PUT UUID of the client here] "
-                                    );
-                                }
-
-                                if let Some(mut downstream_peer) = downstream_peer {
+                                if let Some(mut sink_tx) =
+                                    self.get_downstream_sink_tx(uuid.clone()).await
+                                {
                                     debug!(
-                                        "Sending the Writing order to the downstream peer [TODO PUT UUID of the client here]"
+                                        "Sending the Writing order to the downstream peer [{:?}]",
+                                        uuid.clone()
                                     );
-                                    let downstream_peer_event =
-                                        PeerEvent::Write((payload, header.client_uuid));
+                                    let write_order = PeerEvent::Write((payload, ()));
 
-                                    if let Err(err) =
-                                        downstream_peer.send(downstream_peer_event).await
-                                    {
-                                        error!("Failed to send the Writing order to the downstream peer tx channel with UUID [{:?}]", err);
+                                    if let Err(send_err) = sink_tx.send(write_order).await {
+                                        error!("Failed to send the Writing order to the downstream peer tx channel with UUID [{:?}]", send_err);
                                     }
                                 }
-                            }
-                            RuntimeEvent::MessageFromUpstreamPeer(payload, uuid) => {
-                                debug!("[MessageToUpstreamPeer] Payload length [{}] && Header target client UUID [{}]", payload.len(), uuid.clone());
                             }
                         }
                     }
@@ -232,10 +253,47 @@ impl Runtime {
         tokio::task::spawn(runtime_task);
     }
 
+    async fn get_downstream_sink_tx(
+        &mut self,
+        uuid: String,
+    ) -> Option<DownstreamPeerSinkChannelTx> {
+        if let Ok(parsed_uuid) = Uuid::parse_str(uuid.as_str()) {
+            let peers_pool = &*self.peers_pool.lock().await;
+            // let mut downstream_peer = Result::Err();
+
+            for downstream_peers in peers_pool.downstream_peers_sink_tx.iter() {
+                trace!("Downstream peer [{:?}]", downstream_peers.0)
+            }
+
+            if !peers_pool.downstream_peers_sink_tx.is_empty()
+                && peers_pool
+                    .downstream_peers_sink_tx
+                    .contains_key(&parsed_uuid.clone())
+            {
+                return peers_pool
+                    .downstream_peers_sink_tx
+                    .get(&parsed_uuid)
+                    .cloned();
+            } else {
+                error!(
+                    "No downstream peer has been found for the UUID [{:?}]",
+                    uuid.clone()
+                );
+                return None;
+            }
+        } else {
+            error!("Failed to parse the following UUID = [{:?}]", uuid);
+            return None;
+        }
+    }
+
     async fn remove_upstream_peer(
         &mut self,
         peer_metadata: PeerMetadata,
-    ) -> RuntimeResult<(Option<PeerEventTxChannel>, Option<PeerEventTxChannel>)> {
+    ) -> RuntimeResult<(
+        Option<UpstreamPeerSinkChannelTx>,
+        Option<UpstreamPeerStreamChannelTx>,
+    )> {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
         let peer_sink_tx;
@@ -270,7 +328,10 @@ impl Runtime {
     async fn remove_downstream_peer(
         &mut self,
         peer_metadata: PeerMetadata,
-    ) -> RuntimeResult<(Option<PeerEventTxChannel>, Option<PeerEventTxChannel>)> {
+    ) -> RuntimeResult<(
+        Option<DownstreamPeerSinkChannelTx>,
+        Option<DownstreamPeerStreamChannelTx>,
+    )> {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
         trace!(
@@ -309,8 +370,8 @@ impl Runtime {
 
     pub async fn add_upstream_peer_halves(
         &mut self,
-        sink_tx: PeerEventTxChannel,
-        stream_tx: PeerEventTxChannel,
+        sink_tx: UpstreamPeerSinkChannelTx,
+        stream_tx: UpstreamPeerStreamChannelTx,
         metadata: PeerMetadata,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
@@ -331,8 +392,8 @@ impl Runtime {
     pub async fn add_downstream_peer_halves(
         &mut self,
         metadata: PeerMetadata,
-        sink_tx: PeerEventTxChannel,
-        stream_tx: PeerEventTxChannel,
+        sink_tx: DownstreamPeerSinkChannelTx,
+        stream_tx: DownstreamPeerStreamChannelTx,
     ) {
         let mut locked_peers_pool = self.peers_pool.lock().await;
 
@@ -350,7 +411,10 @@ impl Runtime {
 
 /// New task which will try to send the STOP order to the given peer
 /// Runtime don't care anymore about this peer because it's not more referenced by this last
-async fn send_termination_peer(peer_metadata: PeerMetadata, mut peer_tx: PeerEventTxChannel) {
+async fn send_termination_peer<T>(peer_metadata: PeerMetadata, mut peer_tx: PeerEventTxChannel<T>)
+where
+    T: Send + 'static,
+{
     let task = async move {
         trace!(
             "Sending termination for the peer [{:?}]",
