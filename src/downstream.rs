@@ -8,7 +8,7 @@ use crate::{
     upstream_proto::{Header, InputStreamRequest},
 };
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{sink::SinkExt, stream::StreamExt};
 use std::{fmt::Formatter, net::SocketAddr};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -18,14 +18,17 @@ use uuid::Uuid;
 pub type DownstreamPeerStreamChannelTx = PeerEventTxChannel<()>;
 pub type DownstreamPeerSinkChannelTx = PeerEventTxChannel<()>;
 
+pub type DownstreamTcpSink = futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>;
+pub type DownstreamTcpStream = futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>;
+
 pub struct DownstreamPeerSinkHalve {
     halve: PeerHalve<()>,
-    tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
+    tcp_sink: DownstreamTcpSink,
 }
 
 pub struct DownstreamPeerStreamHalve {
     halve: PeerHalve<()>,
-    tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>,
+    tcp_stream: DownstreamTcpStream,
 }
 
 impl std::fmt::Display for PeerError {
@@ -129,7 +132,7 @@ impl DownstreamPeerSinkHalve {
 
 impl DownstreamPeerStreamHalve {
     pub fn new(
-        tcp_stream: futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>,
+        tcp_stream: DownstreamTcpStream,
         uuid: Uuid,
         runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
@@ -261,11 +264,16 @@ impl DownstreamPeerSinkHalve {
                             paused = true;
                             info!("[Downstream sink ORDER] Pause -");
                         }
-                        PeerEvent::Write((_payload, _)) => {
+                        PeerEvent::Write((payload, _)) => {
                             info!("[Downstream sink ORDER] Write -");
                             //todo check if it's paused
-                            let downstream_message = prepare_downstream_sink_request(_payload);
-
+                            // let downstream_message = prepare_downstream_sink_request(payload);
+                            if let Err(send_err) = self.tcp_sink.send(payload).await {
+                                error!(
+                                    "Failed to send the payload to the downstream [{:?}], cause [{:?}]",
+                                    self.halve.metadata.uuid.clone(), send_err
+                                );
+                            }
                             // tcp_sink.send_all(&mut futures::stream::once(futures::future::ok(payload)));
                         }
                         PeerEvent::Stop => {
