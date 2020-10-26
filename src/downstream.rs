@@ -299,21 +299,6 @@ impl DownstreamPeerSinkHalve {
     }
 }
 
-fn prepare_downstream_sink_request(payload: std::string::String) -> InputStreamRequest {
-    debug!("Preparing downstream peer input request");
-
-    let request = InputStreamRequest {
-        header: Option::Some(Header {
-            client_uuid: String::from("totoierz"),
-            time: "92:398:329".to_string(),
-            address: "127.43.49.30".to_string(),
-        }),
-        payload: payload,
-    };
-
-    return request;
-}
-
 #[cfg(test)]
 mod tests {
     use crate::runtime::RuntimeEvent;

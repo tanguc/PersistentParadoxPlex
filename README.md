@@ -70,3 +70,20 @@ cd misc/grpc && sh start_stub_server.sh
 
 This is a docker container with the port `4770` open, which we'll use to call it from our runtime.
 
+
+
+## Drafts
+
+To add:
+
+- it's a stateful load balancer
+- cannot deal by reconnecting failed tcp connections to another load balancer
+- aimed to be very robust and resilient to errors (written in rust)
+- GRPC very fast (for upstreams)
+- best practices:
+  - Better to have multiple upstreams for multiples clients (TCP)
+  - 
+
+- need to know:
+  - in the case of multiples load balancers (N), upstreams will be have one connection for each load balancers (N), relation N to N, the same for load balancers (N upstreams will have N connections on each load balancer), finally N*N connections in the big picture
+  -  

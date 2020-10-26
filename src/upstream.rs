@@ -15,7 +15,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use enclose::enclose;
-use std::{borrow::BorrowMut, fmt::Debug, net::SocketAddr};
+use futures::Stream;
+use std::{borrow::BorrowMut, fmt::Debug, net::SocketAddr, pin::Pin};
 use tokio;
 use tonic::Status;
 use uuid::Uuid;
@@ -163,6 +164,15 @@ pub struct UpstreamPeerStarted {
     pub metadata: PeerMetadata,
 }
 
+impl Debug for UpstreamPeerStarted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return f
+            .debug_struct("UpstreamPeerStarted")
+            .field("uuid", &self.metadata.uuid)
+            .finish();
+    }
+}
+
 /// state where the upstream has been correctly created
 /// but still need to init the sink & stream connection
 /// due to gRPC constraints, we force to start the sink runtime first
@@ -187,6 +197,9 @@ impl UpstreamPeerReady {
             .await
         {
             Ok(response) => {
+                let my_own_stream = MyStreamClientGRPC {
+                    0: response.into_inner(),
+                };
                 debug!("[Upstream init] Succeed to init the gRPC method.");
                 // Until we haven't initiated the connection to the upstream (sink task above)
                 // we cannot stream from him
@@ -194,7 +207,7 @@ impl UpstreamPeerReady {
                     self.stream_halve.metadata,
                     self.stream_halve.rx,
                     self.stream_halve.runtime_tx,
-                    response.into_inner(),
+                    my_own_stream,
                 ));
             }
             Err(err) => {
@@ -237,11 +250,30 @@ impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
     }
 }
 
+pub struct MyStreamClientGRPC(tonic::codec::Streaming<OutputStreamRequest>);
+
+impl Stream for MyStreamClientGRPC {
+    type Item = Result<OutputStreamRequest, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
+    }
+}
+
+impl Drop for MyStreamClientGRPC {
+    fn drop(&mut self) {
+        info!("The upstream has been dropped");
+    }
+}
+
 async fn upstream_start_stream_runtime(
     metadata: PeerMetadata,
     mut rx: PeerEventRxChannel<String>,
     runtime_tx: RuntimeOrderTxChannel,
-    mut bi_stream_rx: tonic::codec::Streaming<OutputStreamRequest>,
+    mut bi_stream_rx: MyStreamClientGRPC,
 ) {
     let mut paused = false;
 
@@ -316,7 +348,7 @@ async fn upstream_start_stream_runtime(
                     abort = true;
                 }
             },
-            stream_result = (bi_stream_rx.message()) => {
+            stream_result = (bi_stream_rx.0.message()) => {
                 debug!("[Upstream stream runtime] got line");
                 match stream_result {
                     Ok(message) => {
@@ -381,17 +413,14 @@ async fn upstream_start_sink_runtime(
                             metadata.uuid.clone()
                         );
                     }
-                    PeerEvent::Write((payload, downstream_uuid)) => {
+                    PeerEvent::Write((payload, from)) => {
                         debug!("[Upstream Write Event]");
                         if !paused {
                             //TODO would be much better to change the state of the sink loop
                             let size = payload.len();
                             //TODO would be better to trace only with cfg(debug) mode
                             match bi_stream_tx
-                                .send(prepare_upstream_sink_request(
-                                    payload,
-                                    downstream_uuid.clone(),
-                                ))
+                                .send(prepare_upstream_sink_request(payload, from.clone()))
                                 .await
                             {
                                 Ok(_) => {
@@ -446,16 +475,19 @@ pub fn register_upstream_peers(mut runtime: Runtime) {
                 match upstream_peer.start().await {
                     Ok(upstream_peer) => {
                         debug!("Registering upstream client [{:?}]", upstream_peer.metadata.uuid.clone());
-                        runtime
-                            .add_upstream_peer_halves(
-                                upstream_peer.sink_tx.clone(),
-                                upstream_peer.stream_tx.clone(),
-                                upstream_peer.metadata.clone(),
-                            )
-                            .await;
+                        // runtime
+                        //     .add_upstream_peer_halves(
+                        //         upstream_peer.sink_tx.clone(),
+                        //         upstream_peer.stream_tx.clone(),
+                        //         upstream_peer.metadata.clone(),
+                        //     )
+                        //     .await;
+                        if let Err(err) = runtime.tx.send(RuntimeEvent::NewUpstream(upstream_peer)).await {
+                            error!("Failed to send registration event of the new upstream peer to the runtime, cause: [{:?}]", err);
+                        }
                     }
                     Err(err) => {
-                        error!("Failed to register the upstream peer to the runtime");
+                        error!("Failed to start the upstream runtime");
                     }
                 }
             });
@@ -541,6 +573,15 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
             .parse()
             .map_err(|err| {
                 error!("Could not parse addr: [{:?}]", err);
+            })
+            .unwrap(),
+    });
+
+    upstream_peers.push(UpstreamPeerMetadata {
+        host: "127.0.0.1:45887"
+            .parse()
+            .map_err(|err| {
+                error!("Fialed to parse addr [{:?}]", err);
             })
             .unwrap(),
     });

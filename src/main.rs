@@ -1,3 +1,4 @@
+#![feature(linked_list_cursors)]
 #![feature(trace_macros)]
 trace_macros!(false);
 
