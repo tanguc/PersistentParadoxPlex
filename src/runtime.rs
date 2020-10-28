@@ -1,4 +1,4 @@
-use crate::{upstream::UpstreamPeerStarted, utils::RoundRobin};
+use crate::{upstream::UpstreamPeerStarted, utils::round_robin};
 
 use crate::downstream::{DownstreamPeerSinkChannelTx, DownstreamPeerStreamChannelTx};
 use crate::{
@@ -186,32 +186,9 @@ impl Runtime {
     fn start(mut self, mut rx: mpsc::Receiver<RuntimeEvent>) {
         let runtime_task = async move {
             debug!("Starting runtime of PersistentMarkingLB");
-
-            // let mut available_upstreams_rr = {
-            //     let lock = self.peers_pool.lock().await;
-
-            //     lock.upstream_peers_sink_tx.keys().map()
-            //     lock.upstream_peers_sink_tx.iter().cycle().clone()
-
-            // };
-
-            // // Round-robin (RR) scheduling for downstream peers (sink)
-            // let mut upstream_peers_sink_rr = self
-            //     .peers_pool
-            //     .lock()
-            //     .await
-            let mut round_robin_context = RoundRobin::RoundRobinContext::new();
+            let mut round_robin_context = round_robin::RoundRobinContext::new();
 
             loop {
-                // select
-                //          -> rx.recv()
-                //                  => delete a upstream peer if terminated
-                //          -> update_round_robin.timeout()
-                //                  => refresh the round robin context
-                //                  => get the iterator (locally or via box/mutex)
-                //
-                //get updated round robin iterator from the context
-
                 match rx.recv().await {
                     Some(runtime_event) => {
                         info!("Got order from a client");
@@ -272,22 +249,6 @@ impl Runtime {
                             }
                             RuntimeEvent::MessageFromDownstreamPeer(payload, uuid) => {
                                 debug!("ORDER - MESSAGE FROM DOWNSTREAM PEER");
-                                // let upstreams = self.peers_pool.lock().await;
-                                // let mut upstream_tx = Option::None;
-                                // if !upstreams.upstream_peers_sink_tx.is_empty() {
-                                //     // TODO this one shouldnt act like that but find the best peer (by round robin)
-                                //     for upstream_tx_channel in
-                                //         upstreams.upstream_peers_sink_tx.iter()
-                                //     {
-                                //         upstream_tx = Option::Some((
-                                //             upstream_tx_channel.0.clone(),
-                                //             upstream_tx_channel.1.clone(),
-                                //         ));
-                                //     }
-                                // }
-                                // let selected_downstream_sink = {
-                                //     let downstream_peers_sink_rr.next()
-                                // }
                                 if let Some(next_rr_upstream) = round_robin_context.next() {
                                     let next_upstream =
                                         self.get_upstream_sink_tx_by_uuid(&next_rr_upstream).await;

@@ -1,11 +1,11 @@
-pub mod RoundRobin {
-    use std::collections::{HashMap, VecDeque};
-
-    use linked_hash_set::LinkedHashSet;
-    use uuid::Uuid;
-
-    use crate::upstream::UpstreamPeerSinkChannelTx;
-
+/// Round robin implementation
+/// NOTE for the sake of simplicity this implementation
+/// is backed with a vec and a cursor, T has to be Ord
+/// in order to keep sorting always present and keep O(log(n))
+/// complexity for CRUD operations
+/// There could be some undefined behaviour about the ordering
+/// when using `next` function, so please make sure to be aware.
+pub mod round_robin {
     pub struct RoundRobinContext<T> {
         available_candidat: Vec<T>,
         available_cursor: usize,
@@ -19,13 +19,38 @@ pub mod RoundRobin {
             };
         }
 
+        /// NOTE: before to add, we search for an index with binary search
+        /// make sure to keep the sorting in the vec and insert it at this index
+        /// so at the added index, all items at the left are shitfted
         pub fn add(&mut self, candidat: T) {
             trace!("Add round robin candidat [{:?}]", candidat);
-            self.available_candidat.push(candidat);
+
+            match self.available_candidat.binary_search(&candidat) {
+                Ok(_) => {
+                    warn!(
+                        "Failed to insert the candidat [{:?}], it already exists",
+                        &candidat
+                    );
+                }
+                Err(insert_index) => {
+                    trace!(
+                        "Inserting candidat [{:?}] at index [{:?}]",
+                        &candidat,
+                        insert_index
+                    );
+                    self.available_candidat.insert(insert_index, candidat);
+                }
+            }
         }
 
         pub fn delete(&mut self, candidat: &T) -> Option<T> {
-            trace!("Delete round robin candidat [{:?}]", candidat);
+            debug!("Delete round robin candidat [{:?}]", candidat);
+            trace!(
+                "Before deletion = {:?} && cursor [{:?}]",
+                self.available_candidat,
+                self.available_cursor
+            );
+
             let mut removed = Option::None;
 
             if let Ok(candidat_index) = self.available_candidat.binary_search(candidat) {
@@ -41,12 +66,17 @@ pub mod RoundRobin {
                     self.available_cursor -= 1;
                 }
             } else {
-                error!("Failed to delete the candidat [{:?}]", candidat);
+                error!("Failed to find the candidat [{:?}] for deletion", candidat);
             }
 
             return removed;
         }
 
+        /// Retrieve the next candidat which is determined by the round robin
+        /// algorithm
+        /// NOTE: due to technical reasons and to avoid too much complexity
+        /// there is a special use case when the a new candidat will be added to the  
+        /// current cursor, the next one will be the new one and not old first (shifted one)
         pub fn next(&mut self) -> Option<&T> {
             trace!("Next round robin candidat");
             let mut candidat = Option::None;
@@ -62,70 +92,112 @@ pub mod RoundRobin {
         }
     }
 
-    // /// Only handle upstream sink tx for the moment
-    // pub struct RoundRobinContext<T> {
-    //     since_added_tx: VecDeque<T>,
-    //     since_deleted_tx: VecDeque<T>,
-    //     current_txs: LinkedHashSet<T>,
-    // }
+    #[cfg(test)]
+    mod tests {
 
-    // /// Round robin for Upstream peers (sink channel)
-    // pub struct RoundRobinContextIterator<T> {
-    //     curr_cursor: usize,
-    //     inner: Vec<T>,
-    // }
+        use super::*;
+        use test_env_log::test;
+        use uuid::Uuid;
 
-    // impl<T> RoundRobinContext<T> {
-    //     pub fn new() -> Self {
-    //         return Self {
-    //             since_added_tx: VecDeque::default(),
-    //             since_deleted_tx: VecDeque::default(),
-    //             current_txs: LinkedHashSet::new(),
-    //         };
-    //     }
+        #[test]
+        fn candidat_is_added() {
+            let mut rr: RoundRobinContext<Uuid> = RoundRobinContext::new();
 
-    //     fn update<'b>(&mut self, from: &'b HashMap<T, UpstreamPeerSinkChannelTx>) {
-    //         trace!("Updating upstream peers sink tx (round robin)");
-    //         //consume since_added
-    //         //consume since_deleted
-    //         //return the new iterator (as an option)
-    //         // self.inner = from.keys().cloned().collect();
-    //     }
+            let candidat_one = Uuid::new_v4();
+            let candidat_two = Uuid::new_v4();
+            let candidat_three = Uuid::new_v4();
+            info!("candidat one = [{:?}]", &candidat_one);
+            info!("candidat two = [{:?}]", &candidat_two);
+            info!("candidat three = [{:?}]", &candidat_three);
 
-    //     pub fn new_candidat(candidat: T) {}
+            rr.add(candidat_one.clone());
+            rr.add(candidat_two.clone());
+            rr.add(candidat_three.clone());
 
-    //     pub fn delete_candidat(candidat: T) {}
+            let mut candidat_added = vec![];
+            for _ in 1..4 {
+                candidat_added.push(rr.next().unwrap().clone());
+            }
+            info!("Candidat added {:?}", &candidat_added);
 
-    //     pub fn iter() -> RoundRobinContextIterator<T> {
-    //         return RoundRobinContextIterator::new();
-    //     }
-    // }
+            assert!(candidat_added
+                .iter()
+                .find(|&c| c == &candidat_one)
+                .is_some());
+            assert!(candidat_added
+                .iter()
+                .find(|&c| c == &candidat_two)
+                .is_some());
+            assert!(candidat_added
+                .iter()
+                .find(|&c| c == &candidat_three)
+                .is_some());
+        }
 
-    // impl<T> RoundRobinContextIterator<T> {
-    //     pub fn new() -> Self {
-    //         trace!("Creating Round Robin for upstreams peer sink tx");
-    //         Self {
-    //             curr_cursor: 0,
-    //             inner: vec![],
-    //         }
-    //     }
-    // }
+        #[test]
+        fn candidat_is_deleted() {
+            let mut rr: RoundRobinContext<Uuid> = RoundRobinContext::new();
 
-    // impl<T> Iterator for RoundRobinContextIterator<T> {
-    //     type Item = T;
+            let candidat_one = Uuid::new_v4();
+            let candidat_two = Uuid::new_v4();
+            let candidat_three = Uuid::new_v4();
 
-    //     fn next(&mut self) -> Option<Self::Item> {
-    //         if !self.inner.is_empty() {
-    //             return Some(self.inner.get(self.inner.len() % self.curr_cursor)?.clone());
-    //         }
+            let candidat_to_delete = &candidat_two;
 
-    //         return None;
-    //     }
-    // }
+            rr.add(candidat_one.clone());
+            rr.add(candidat_two.clone());
+            rr.add(candidat_three.clone());
 
-    // /// Task with notifying job to the given channel
-    // /// Will notify every X ms about the new round robin context iterator
-    // pub fn create_task(tokio::) {
+            let deleted = rr.delete(candidat_to_delete);
+            trace!("Deleted candidat [{:?}]", &deleted);
+            assert!(&deleted.unwrap() == candidat_to_delete);
 
-    // }
+            let mut candidat_remaining = vec![];
+            for _ in 1..3 {
+                candidat_remaining.push(rr.next().unwrap().clone());
+            }
+            info!("Candidat remaining {:?}", &candidat_remaining);
+
+            assert!(candidat_remaining
+                .iter()
+                .find(|&c| c == &candidat_one)
+                .is_some());
+            assert!(candidat_remaining
+                .iter()
+                .find(|&c| c == &candidat_three)
+                .is_some());
+        }
+
+        #[test]
+        fn candidats_next() {
+            let mut rr = RoundRobinContext::new();
+
+            let candidat_one = Uuid::new_v4();
+            let candidat_two = Uuid::new_v4();
+            let candidat_three = Uuid::new_v4();
+
+            rr.add(candidat_one.clone());
+            rr.add(candidat_two.clone());
+            rr.add(candidat_three.clone());
+
+            let mut candidats_added = vec![];
+            for _ in 1..4 {
+                candidats_added.push(rr.next().unwrap().clone());
+            }
+
+            assert!(candidats_added
+                .iter()
+                .find(|&c| c == &candidat_one)
+                .is_some());
+            assert!(candidats_added
+                .iter()
+                .find(|&c| c == &candidat_two)
+                .is_some());
+
+            assert!(candidats_added
+                .iter()
+                .find(|&c| c == &candidat_three)
+                .is_some());
+        }
+    }
 }
