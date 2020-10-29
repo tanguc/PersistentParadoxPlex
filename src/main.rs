@@ -141,7 +141,7 @@ async fn main() {
     register_upstream_peers(runtime.clone());
 
     let port = 7999;
-    let uri = "127.0.0.1";
+    let uri = "0.0.0.0";
     let addr = format!("{}:{}", uri, port);
     debug!("[URI] = {} && [PORT] = {}", &uri, port);
 

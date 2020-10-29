@@ -362,11 +362,18 @@ impl Runtime {
     ) -> Option<UpstreamPeerSinkChannelTx> {
         let peers_pool = &*self.peers_pool.lock().await;
 
+        trace!(
+            "Upstream sink tx list = {:?}",
+            &peers_pool.upstream_peers_sink_tx
+        );
         if !peers_pool.upstream_peers_sink_tx.is_empty() {
-            if !peers_pool.upstream_peers_sink_tx.contains_key(uuid) {
+            if peers_pool.upstream_peers_sink_tx.contains_key(uuid) {
                 return peers_pool.upstream_peers_sink_tx.get(uuid).cloned();
             } else {
-                error!("Failed to retrieve the upstream sink tx [{:?}]", &uuid);
+                error!(
+                    "Failed to get upstream sink tx [{:?}], it does not exist",
+                    &uuid
+                );
                 return None;
             }
         } else {

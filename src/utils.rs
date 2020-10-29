@@ -78,13 +78,14 @@ pub mod round_robin {
         /// there is a special use case when the a new candidat will be added to the  
         /// current cursor, the next one will be the new one and not old first (shifted one)
         pub fn next(&mut self) -> Option<&T> {
-            trace!("Next round robin candidat");
             let mut candidat = Option::None;
 
             if !self.available_candidat.is_empty() {
                 let index = self.available_cursor % self.available_candidat.len();
 
                 candidat = Some(&self.available_candidat[index]);
+                trace!("Next round robin candidat [{:?}]", &candidat);
+
                 self.available_cursor += 1;
             }
 
