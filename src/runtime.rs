@@ -1,4 +1,8 @@
-use crate::{upstream::UpstreamPeerStarted, utils::round_robin};
+use crate::{
+    downstream::PeerRuntime,
+    upstream::{UpstreamPeer, UpstreamPeerMetadata, UpstreamPeerStarted},
+    utils::round_robin,
+};
 
 use crate::downstream::{DownstreamPeerSinkChannelTx, DownstreamPeerStreamChannelTx};
 use crate::{
@@ -40,7 +44,7 @@ pub enum PeerEvent<T = ()> {
 
 #[derive(Debug)]
 pub enum RuntimeEventUpstream {
-    Register(UpstreamPeerStarted),
+    Register(UpstreamPeerMetadata),
     TerminatedConnection(PeerMetadata),
     Message(String, String),
 }
@@ -184,6 +188,16 @@ impl Runtime {
         }
     }
 
+    /// Register a new upstream with the given metadata
+    /// Create a new task for each register.
+    /// Until the upstream peer is effective, it has to pass multiple
+    /// state to be defined as ready.
+    // async fn register_upstream_peer(&self, metadata: UpstreamPeerMetadata) {
+    //     debug!("Registering a new upstream peer");
+    //     trace!("new upstream peer metadata [{:?}]", &metadata);
+
+    // }
+
     async fn handle_upstream_orders(
         &mut self,
         order: RuntimeEventUpstream,
@@ -192,12 +206,24 @@ impl Runtime {
         debug!("HANDLE UPSTREAM ORDERS");
 
         match order {
-            RuntimeEventUpstream::Register(peer) => {
+            RuntimeEventUpstream::Register(metadata) => {
                 debug!("REGISTER NEW UPSTREAM ORDER");
-                let peer_uuid = peer.metadata.uuid.clone();
-                self.add_upstream_peer_halves(peer.sink_tx, peer.stream_tx, peer.metadata)
+
+                let ready_upstream = UpstreamPeer::new(&metadata, self.tx.clone()).start().await;
+                if let Ok(ready_upstream) = ready_upstream {
+                    let peer_uuid = ready_upstream.metadata.uuid.clone();
+                    self.add_upstream_peer_halves(
+                        ready_upstream.sink_tx,
+                        ready_upstream.stream_tx,
+                        ready_upstream.metadata,
+                    )
                     .await;
-                round_robin_context.add(peer_uuid);
+                    round_robin_context.add(peer_uuid);
+                } else {
+                    error!("Failed to register the upstream peer [{:?}]", &metadata);
+                }
+
+                // let upstream_ready = self.register_upstream_peer(metadata).await;
             }
             /// Only for STREAM runtime of upstream peers
             RuntimeEventUpstream::TerminatedConnection(peer_metadata) => {

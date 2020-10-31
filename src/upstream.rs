@@ -2,7 +2,7 @@ use crate::{
     downstream::PeerError,
     runtime::{
         send_message_to_runtime, PeerEvent, PeerEventTxChannel, PeerMetadata, Runtime,
-        RuntimeEvent, RuntimeOrderTxChannel,
+        RuntimeEvent, RuntimeEventUpstream, RuntimeOrderTxChannel,
     },
 };
 use crate::{downstream::PeerRuntime, runtime::PeerHalve};
@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use enclose::enclose;
 use futures::Stream;
 use std::{borrow::BorrowMut, fmt::Debug, net::SocketAddr, pin::Pin};
-use tokio;
+use tokio::{self, task::JoinHandle};
 use tonic::Status;
 use uuid::Uuid;
 
@@ -67,9 +67,10 @@ where
 {
     state: T,
 }
-
+#[derive(Debug)]
 pub struct UpstreamPeerMetadata {
-    host: SocketAddr,
+    pub host: SocketAddr,
+    pub alive_timeout: usize,
 }
 
 #[async_trait]
@@ -143,11 +144,11 @@ impl UpstreamPeerStateTransition for UpstreamPeerWaitReadiness {
 }
 
 impl UpstreamPeer<UpstreamPeerPending> {
-    fn new(metadata: UpstreamPeerMetadata, runtime_tx: RuntimeOrderTxChannel) -> Self {
+    pub fn new(metadata: &UpstreamPeerMetadata, runtime_tx: RuntimeOrderTxChannel) -> Self {
         debug!("Creating upstream peer halves");
         let uuid = Uuid::new_v4();
-        let stream_halve = PeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host);
-        let sink_halve = PeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host);
+        let stream_halve = PeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host.clone());
+        let sink_halve = PeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host.clone());
 
         UpstreamPeer {
             state: UpstreamPeerPending {
@@ -179,44 +180,49 @@ impl Debug for UpstreamPeerStarted {
 /// then wait an order from another source to write then start the runtime for stream
 /// //TODO document about the stream (channel rx) which might be not available until the gRPC init has passed  
 impl UpstreamPeerReady {
-    async fn start(mut self) {
+    async fn start(mut self) -> JoinHandle<Result<(), tonic::Status>> {
         debug!("[UpstreamPeerReady] starting...");
 
-        let (bi_stream_tx, bi_stream_rx) = tokio::sync::mpsc::channel(100);
-        // We need to start the sink before to stream,
-        // mainly because gRPC method is waiting from someone something to send
-        tokio::task::spawn(upstream_start_sink_runtime(
-            self.sink_halve.metadata,
-            self.sink_halve.runtime_tx,
-            self.sink_halve.rx,
-            bi_stream_tx,
-        ));
-        match self
-            .client
-            .bidirectional_streaming(tonic::Request::new(bi_stream_rx))
-            .await
-        {
-            Ok(response) => {
-                let my_own_stream = MyStreamClientGRPC {
-                    0: response.into_inner(),
-                };
-                debug!("[Upstream init] Succeed to init the gRPC method.");
-                // Until we haven't initiated the connection to the upstream (sink task above)
-                // we cannot stream from him
-                tokio::task::spawn(upstream_start_stream_runtime(
-                    self.stream_halve.metadata,
-                    self.stream_halve.rx,
-                    self.stream_halve.runtime_tx,
-                    my_own_stream,
-                ));
-            }
-            Err(err) => {
-                error!(
-                    "[UpstreamPeer start] Failed to get the stream, error [{:?}]",
-                    err
-                );
+        let task = move || async move {
+            let (bi_stream_tx, bi_stream_rx) = tokio::sync::mpsc::channel(100);
+            // We need to start the sink before to stream,
+            // mainly because gRPC method is waiting from someone something to send
+            tokio::task::spawn(upstream_start_sink_runtime(
+                self.sink_halve.metadata,
+                self.sink_halve.runtime_tx,
+                self.sink_halve.rx,
+                bi_stream_tx,
+            ));
+            match self
+                .client
+                .bidirectional_streaming(tonic::Request::new(bi_stream_rx))
+                .await
+            {
+                Ok(response) => {
+                    let my_own_stream = MyStreamClientGRPC {
+                        0: response.into_inner(),
+                    };
+                    debug!("[Upstream init] Succeed to init the gRPC method.");
+                    // Until we haven't initiated the connection to the upstream (sink task above)
+                    // we cannot stream from him
+                    tokio::task::spawn(upstream_start_stream_runtime(
+                        self.stream_halve.metadata,
+                        self.stream_halve.rx,
+                        self.stream_halve.runtime_tx,
+                        my_own_stream,
+                    ));
+                    Ok(())
+                }
+                Err(err) => {
+                    error!(
+                        "[UpstreamPeer start] Failed to get the stream, error [{:?}]",
+                        &err
+                    );
+                    Err(err)
+                }
             }
         };
+        tokio::task::spawn(task())
     }
 }
 
@@ -224,29 +230,40 @@ impl UpstreamPeerReady {
 impl PeerRuntime for UpstreamPeer<UpstreamPeerPending> {
     type Output = UpstreamPeerStarted;
 
+    /// Create a new task and transit between states
+    /// until the upstream is completely effective
     async fn start(mut self) -> Result<Self::Output, PeerError> {
         debug!("[UpstreamingPeer - UpstreamPeerPending] starting...");
 
-        let metadata = self.state.stream_halve.metadata.clone();
-        let connected = self
-            .state
-            .next()
-            .await
-            .ok_or_else(|| PeerError::BrokenPipe)?;
-        let active = connected
-            .next()
-            .await
-            .ok_or_else(|| PeerError::BrokenPipe)?;
+        let task = move || async move {
+            let metadata = self.state.stream_halve.metadata.clone();
+            let connected = self
+                .state
+                .next()
+                .await
+                .ok_or_else(|| PeerError::BrokenPipe)?;
+            let active = connected
+                .next()
+                .await
+                .ok_or_else(|| PeerError::BrokenPipe)?;
 
-        let sink_tx = active.sink_halve.tx.clone();
-        let stream_tx = active.stream_halve.tx.clone();
-        tokio::spawn(active.start());
+            let sink_tx = active.sink_halve.tx.clone();
+            let stream_tx = active.stream_halve.tx.clone();
+            tokio::spawn(active.start());
 
-        Ok(UpstreamPeerStarted {
-            sink_tx,
-            stream_tx,
-            metadata,
-        })
+            Ok::<Self::Output, PeerError>(UpstreamPeerStarted {
+                sink_tx,
+                stream_tx,
+                metadata,
+            })
+        };
+        match tokio::task::spawn(task())
+            .await
+            .map_err(|err| PeerError::BrokenPipe)?
+        {
+            Ok(res) => Ok(res),
+            Err(_) => Err(PeerError::BrokenPipe),
+        }
     }
 }
 
@@ -319,7 +336,11 @@ async fn upstream_start_stream_runtime(
                             req_message
                         );
                         if let Some(header) = req_message.header {
-                            let runtime_event = RuntimeEvent::MessageFromUpstreamPeer(req_message.payload, header.client_uuid.clone());
+                            let runtime_event = RuntimeEvent::Upstream(
+                                RuntimeEventUpstream::Message(
+                                    req_message.payload, header.client_uuid.clone()
+                                )
+                            );
                             send_message_to_runtime(runtime_tx, metadata, runtime_event)
                             .await
                             .map_err(|err| () )
@@ -364,8 +385,12 @@ async fn upstream_start_stream_runtime(
                             err,
                             err.details()
                         );
-                        let runtime_event = RuntimeEvent::UpstreamPeerTerminatedConnection(metadata.clone());
-                        let _ = send_message_to_runtime(runtime_tx.clone(), metadata.clone(), runtime_event).await;
+                        let runtime_order = RuntimeEvent::Upstream(
+                            RuntimeEventUpstream::TerminatedConnection(
+                                metadata.clone()
+                            )
+                        );
+                        let _ = send_message_to_runtime(runtime_tx.clone(), metadata.clone(), runtime_order).await;
 
                         warn!("Aborting Upstream [{:?}] stream runtime, cause [{:?}]", metadata.uuid.clone(), err);
                         abort = true;
@@ -462,39 +487,18 @@ async fn upstream_start_sink_runtime(
 /// Register all upstream peers from a source
 /// All wrapped into a separate task
 /// Each upstream peer initialization are also wrapped into a different task
-pub fn register_upstream_peers(mut runtime: Runtime) {
-    let task = async move {
-        debug!("Registering upstream peers");
-        // TODO only for debugging purposes
-        let upstream_peer_metadata = get_upstream_peers();
+pub async fn register_upstream_peers(mut runtime_tx: RuntimeOrderTxChannel) {
+    let upstream_peer_metadata = get_upstream_peers();
 
-        for upstream_peer_metadata in upstream_peer_metadata {
-            let upstream_task = enclose!((mut runtime) move || async move {
-                let upstream_peer = UpstreamPeer::new(upstream_peer_metadata, runtime.tx.clone());
+    for upstream_peer_metadata in upstream_peer_metadata {
+        trace!("foobar1");
+        let runtime_order =
+            RuntimeEvent::Upstream(RuntimeEventUpstream::Register(upstream_peer_metadata));
 
-                match upstream_peer.start().await {
-                    Ok(upstream_peer) => {
-                        debug!("Registering upstream client [{:?}]", upstream_peer.metadata.uuid.clone());
-                        // runtime
-                        //     .add_upstream_peer_halves(
-                        //         upstream_peer.sink_tx.clone(),
-                        //         upstream_peer.stream_tx.clone(),
-                        //         upstream_peer.metadata.clone(),
-                        //     )
-                        //     .await;
-                        if let Err(err) = runtime.tx.send(RuntimeEvent::NewUpstream(upstream_peer)).await {
-                            error!("Failed to send registration event of the new upstream peer to the runtime, cause: [{:?}]", err);
-                        }
-                    }
-                    Err(err) => {
-                        error!("Failed to start the upstream runtime");
-                    }
-                }
-            });
-            tokio::spawn(upstream_task());
+        if let Err(err) = runtime_tx.send(runtime_order).await {
+            error!("Failed to register upstream peers, cause : [{:?}]", err);
         }
-    };
-    tokio::spawn(task);
+    }
 }
 
 // // impl PeerRuntime for UpstreamPeer<InputStreamRequest> {
@@ -575,6 +579,7 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
                 error!("Could not parse addr: [{:?}]", err);
             })
             .unwrap(),
+        alive_timeout: 30,
     });
 
     upstream_peers.push(UpstreamPeerMetadata {
@@ -584,6 +589,7 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
                 error!("Fialed to parse addr [{:?}]", err);
             })
             .unwrap(),
+        alive_timeout: 30,
     });
 
     upstream_peers

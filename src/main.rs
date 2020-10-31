@@ -1,5 +1,7 @@
 #![feature(linked_list_cursors)]
 #![feature(trace_macros)]
+#![feature(decl_macro)]
+
 trace_macros!(false);
 
 extern crate pretty_env_logger;
@@ -11,20 +13,25 @@ extern crate anyhow;
 extern crate enclose;
 extern crate uuid;
 
+pub mod admin_management_server;
 pub mod downstream;
 pub mod runtime;
 pub mod upstream;
 pub mod upstream_proto;
 pub mod utils;
 use crate::runtime::PeerEvent;
+use admin_management_server::start_http_management_server;
 use anyhow::{anyhow, Result};
 use downstream::{DownstreamPeer, DownstreamPeerSinkChannelTx, PeerRuntime};
 use futures::StreamExt;
-use runtime::{PeerEventTxChannel, PeerMetadata, Runtime};
-use std::net::SocketAddr;
-use tokio::net::{TcpListener, TcpStream};
+use runtime::{PeerEventTxChannel, PeerMetadata, Runtime, RuntimePeersPool};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 use tokio::time::{delay_for, Duration};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
 use upstream::register_upstream_peers;
 
 /// should be in the downstream scope
@@ -57,6 +64,7 @@ async fn handle_new_downstream_client(runtime: &mut Runtime, tcp_stream: TcpStre
                 Ok(started) => {
                     let sink_tx = started.sink_tx.clone();
                     runtime
+                        // this has to be done via sending an order via channel and not accessing it like this.......
                         .add_downstream_peer_halves(
                             started.metadata.clone(),
                             started.sink_tx,
@@ -138,7 +146,8 @@ async fn main() {
     // upstream_proto::compile_protos();
 
     let mut runtime = Runtime::new();
-    register_upstream_peers(runtime.clone());
+    register_upstream_peers(runtime.tx.clone()).await;
+    start_http_management_server(runtime.tx.clone());
 
     let port = 7999;
     let uri = "0.0.0.0";

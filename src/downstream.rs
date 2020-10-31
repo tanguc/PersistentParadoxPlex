@@ -3,7 +3,7 @@ use crate::{
     runtime::PeerEventTxChannel,
     runtime::{
         send_message_to_runtime, PeerEvent, PeerHalve, PeerMetadata, RuntimeError, RuntimeEvent,
-        RuntimeOrderTxChannel,
+        RuntimeEventDownstream, RuntimeOrderTxChannel,
     },
     upstream_proto::{Header, InputStreamRequest},
 };
@@ -186,15 +186,16 @@ impl DownstreamPeerStreamHalve {
                     Some(line) => match line {
                         Ok(line) => {
                             debug!("Got a new line : {:?}", line);
-                            let runtime_event = RuntimeEvent::MessageFromDownstreamPeer(
-                                line,
-                                self.halve.metadata.uuid.clone().to_string(),
-                            );
+                            let runtime_order =
+                                RuntimeEvent::Downstream(RuntimeEventDownstream::Message(
+                                    line,
+                                    self.halve.metadata.uuid.clone().to_string(),
+                                ));
 
                             if let Err(err) = send_message_to_runtime(
                                 self.halve.runtime_tx.clone(),
                                 self.halve.metadata.clone(),
-                                runtime_event,
+                                runtime_order,
                             )
                             .await
                             {
@@ -220,13 +221,15 @@ impl DownstreamPeerStreamHalve {
                     },
                     None => {
                         debug!("[Peer terminated connection] notifying runtime");
-                        let runtime_event = RuntimeEvent::DownstreamPeerTerminatedConnection(
-                            self.halve.metadata.clone(),
-                        );
+                        let runtime_order =
+                            RuntimeEvent::Downstream(RuntimeEventDownstream::TerminatedConnection(
+                                self.halve.metadata.clone(),
+                            ));
+
                         if let Err(err) = send_message_to_runtime(
                             self.halve.runtime_tx.clone(),
                             self.halve.metadata.clone(),
-                            runtime_event,
+                            runtime_order,
                         )
                         .await
                         {
