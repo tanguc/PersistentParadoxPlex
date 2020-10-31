@@ -20,6 +20,9 @@ linked_hash_set = "0.1.4"
 log = "0.4.8"
 pretty_env_logger = "0.4.0"
 prost = "0.6"
+rocket = "0.4"
+rocket_contrib = "0.4"
+serde = {version = "1.0", features = ["derive"]}
 test-env-log = "0.2.2"
 tokio = {version = "0.2.13", features = ["sync", "macros", "net", "tcp", "stream", "rt-threaded", "time"]}
 tokio-util = {version = "0.3.0", features = ["codec"]}
