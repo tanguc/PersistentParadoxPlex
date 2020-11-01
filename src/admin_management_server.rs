@@ -4,14 +4,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub mod upstream {
-
-    use std::net::SocketAddr;
-
     use rocket::{get, post, State};
+    use std::net::SocketAddr;
     use tokio::sync::mpsc::error::TrySendError;
 
     pub mod request {
-
         use serde::Deserialize;
 
         #[derive(Debug, Deserialize)]
@@ -31,11 +28,6 @@ pub mod upstream {
     #[post("/add", format = "application/json", data = "<metadata>")]
     pub fn add_upstream(metadata: Json<AddUpstream>, runtime_tx: State<'_, RuntimeOrderTxChannel>) {
         trace!("Adding a new upstream with data [{:?}]", &metadata);
-        // let socket_addr = SocketAddr::new(
-        //     IpAddr::V4(
-        //         Ipv4Addr::new()
-        //     )
-        // )
 
         let addr = format!("{}:{}", metadata.host, metadata.port);
         if let Ok(addr_parsed) = addr.parse::<SocketAddr>() {
@@ -82,17 +74,20 @@ pub mod admin {}
 pub fn start_http_management_server(runtime_tx: RuntimeOrderTxChannel) {
     debug!("Starting http management server");
 
-    rocket::ignite()
-        .mount(
-            "/upstream",
-            routes![
-                upstream::add_upstream,
-                upstream::delete_upstream,
-                upstream::get_upstreams
-            ],
-        )
-        .mount("/downstream", routes![])
-        .mount("/admin", routes![])
-        .manage(runtime_tx)
-        .launch();
+    let task = || async move {
+        rocket::ignite()
+            .mount(
+                "/upstream",
+                routes![
+                    upstream::add_upstream,
+                    upstream::delete_upstream,
+                    upstream::get_upstreams
+                ],
+            )
+            .mount("/downstream", routes![])
+            .mount("/admin", routes![])
+            .manage(runtime_tx)
+            .launch();
+    };
+    tokio::task::spawn(task());
 }

@@ -108,8 +108,9 @@ fn init_logging() -> anyhow::Result<()> {
     }
 
     if let Ok(debug_level) = debug_level.into_string() {
+        // let env_filter = Ok::<_, ()>(tracing_subscriber::EnvFilter::from_default_env());
         let env_filter = tracing_subscriber::EnvFilter::try_new(format!(
-            "persistent_marking_lb={},tonic=trace",
+            "persistent_marking_lb={},tonic=trace,tokio=trace",
             debug_level.clone()
         ));
         match env_filter {
@@ -121,7 +122,6 @@ fn init_logging() -> anyhow::Result<()> {
                         eprintln!("Failed to init with env filter, aborting: {:?}", err);
                         anyhow!(err)
                     })?;
-                println!("installed");
                 Ok(())
             }
             Err(err) => {

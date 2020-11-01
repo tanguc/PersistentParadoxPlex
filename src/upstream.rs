@@ -491,7 +491,6 @@ pub async fn register_upstream_peers(mut runtime_tx: RuntimeOrderTxChannel) {
     let upstream_peer_metadata = get_upstream_peers();
 
     for upstream_peer_metadata in upstream_peer_metadata {
-        trace!("foobar1");
         let runtime_order =
             RuntimeEvent::Upstream(RuntimeEventUpstream::Register(upstream_peer_metadata));
 

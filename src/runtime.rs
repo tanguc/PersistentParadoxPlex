@@ -299,6 +299,7 @@ impl Runtime {
                             };
                             let event = PeerEvent::Write((payload, uuid.clone().to_string()));
 
+                            // TODO if the channel is full, should reconsider to send to another upstream peer
                             if let Err(err) = tx.try_send(event) {
                                 // try send_timeout looks better
                                 warn!("[Failed to send message to the upstream [{:?}], veryfying why...", uuid.clone());
@@ -333,6 +334,7 @@ impl Runtime {
             let mut round_robin_context = round_robin::RoundRobinContext::new();
 
             loop {
+                debug!("WAITING ORDER FOR RUNTIME");
                 match rx.recv().await {
                     Some(runtime_event) => {
                         info!("Got order from a client");
