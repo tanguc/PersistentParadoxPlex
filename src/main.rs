@@ -22,9 +22,9 @@ pub mod utils;
 use crate::runtime::PeerEvent;
 use admin_management_server::start_http_management_server;
 use anyhow::{anyhow, Result};
-use downstream::{DownstreamPeer, DownstreamPeerSinkChannelTx, PeerRuntime};
+use downstream::{DownstreamPeer, DownstreamPeerEventTx, PeerRuntime};
 use futures::StreamExt;
-use runtime::{PeerEventTxChannel, PeerMetadata, Runtime, RuntimePeersPool};
+use runtime::{PeerMetadata, Runtime, RuntimePeersPool};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 use tokio::time::{delay_for, Duration};
@@ -36,7 +36,7 @@ use upstream::register_upstream_peers;
 
 /// should be in the downstream scope
 async fn dummy_task_for_writing_as_downstream_clients(
-    mut peer_sink_tx_channel: DownstreamPeerSinkChannelTx,
+    mut peer_sink_tx_channel: DownstreamPeerEventTx,
 ) {
     info!("Starting a dummy downstream client (sink)");
 

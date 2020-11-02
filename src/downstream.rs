@@ -1,11 +1,6 @@
-use crate::{
-    runtime::PeerEventRxChannel,
-    runtime::PeerEventTxChannel,
-    runtime::{
-        send_message_to_runtime, PeerEvent, PeerHalve, PeerMetadata, RuntimeError, RuntimeEvent,
-        RuntimeEventDownstream, RuntimeOrderTxChannel,
-    },
-    upstream_proto::{Header, InputStreamRequest},
+use crate::runtime::{
+    send_message_to_runtime, PeerEvent, PeerMetadata, RuntimeError, RuntimeEvent,
+    RuntimeEventDownstream, RuntimeOrderTxChannel,
 };
 use async_trait::async_trait;
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -15,19 +10,26 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LinesCodec};
 use uuid::Uuid;
 
-pub type DownstreamPeerStreamChannelTx = PeerEventTxChannel<()>;
-pub type DownstreamPeerSinkChannelTx = PeerEventTxChannel<()>;
+pub type DownstreamPeerEventTx = tokio::sync::mpsc::Sender<PeerEvent<(String, ())>>;
+pub type DownstreamPeerEventRx = tokio::sync::mpsc::Receiver<PeerEvent<(String, ())>>;
 
 pub type DownstreamTcpSink = futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>;
 pub type DownstreamTcpStream = futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>;
 
+pub struct DownstreamPeerHalve {
+    pub metadata: PeerMetadata,
+    pub runtime_tx: RuntimeOrderTxChannel,
+    pub tx: DownstreamPeerEventTx,
+    pub rx: DownstreamPeerEventRx,
+}
+
 pub struct DownstreamPeerSinkHalve {
-    halve: PeerHalve<()>,
+    halve: DownstreamPeerHalve,
     tcp_sink: DownstreamTcpSink,
 }
 
 pub struct DownstreamPeerStreamHalve {
-    halve: PeerHalve<()>,
+    halve: DownstreamPeerHalve,
     tcp_stream: DownstreamTcpStream,
 }
 
@@ -81,13 +83,17 @@ impl DownstreamPeer {
     ) -> Self {
         let frame = Framed::new(tcp_stream, LinesCodec::new());
         let (tcp_sink, tcp_stream) = frame.split::<String>();
-        let uuid = Uuid::new_v4();
+        let uuid = Uuid::new_v4().to_string();
 
-        let peer_sink: DownstreamPeerSinkHalve =
-            DownstreamPeerSinkHalve::new(tcp_sink, uuid, runtime_tx.clone(), socket_addr.clone());
+        let peer_sink: DownstreamPeerSinkHalve = DownstreamPeerSinkHalve::new(
+            tcp_sink,
+            uuid.clone(),
+            runtime_tx.clone(),
+            socket_addr.clone(),
+        );
         let peer_stream: DownstreamPeerStreamHalve = DownstreamPeerStreamHalve::new(
             tcp_stream,
-            uuid,
+            uuid.clone(),
             runtime_tx.clone(),
             socket_addr.clone(),
         );
@@ -95,7 +101,7 @@ impl DownstreamPeer {
         Self {
             metadata: PeerMetadata {
                 socket_addr: socket_addr.clone(),
-                uuid: uuid.clone(),
+                uuid,
             },
             sink: peer_sink,
             stream: peer_stream,
@@ -112,19 +118,19 @@ pub trait PeerRuntime {
 
 pub struct DownstreamPeerFinalState {
     pub metadata: PeerMetadata,
-    pub sink_tx: PeerEventTxChannel<()>,
-    pub stream_tx: PeerEventTxChannel<()>,
+    pub sink_tx: DownstreamPeerEventTx,
+    pub stream_tx: DownstreamPeerEventTx,
 }
 
 impl DownstreamPeerSinkHalve {
     pub fn new(
         tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
-        uuid: Uuid,
+        uuid: String,
         runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
     ) -> Self {
         DownstreamPeerSinkHalve {
-            halve: PeerHalve::new(uuid, runtime_tx, socket_addr),
+            halve: DownstreamPeerHalve::new(uuid, runtime_tx, socket_addr),
             tcp_sink,
         }
     }
@@ -133,21 +139,21 @@ impl DownstreamPeerSinkHalve {
 impl DownstreamPeerStreamHalve {
     pub fn new(
         tcp_stream: DownstreamTcpStream,
-        uuid: Uuid,
+        uuid: String,
         runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
     ) -> Self {
         DownstreamPeerStreamHalve {
-            halve: PeerHalve::new(uuid, runtime_tx, socket_addr),
+            halve: DownstreamPeerHalve::new(uuid, runtime_tx, socket_addr),
             tcp_stream,
         }
     }
 }
 
-impl<T> PeerHalve<T> {
-    pub fn new(uuid: Uuid, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
+impl DownstreamPeerHalve {
+    pub fn new(uuid: String, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
         let (tx, rx) = mpsc::channel(1000);
-        PeerHalve {
+        DownstreamPeerHalve {
             metadata: PeerMetadata { uuid, socket_addr },
             runtime_tx,
             rx,
@@ -173,7 +179,7 @@ impl PeerRuntime for DownstreamPeer {
 }
 
 impl DownstreamPeerStreamHalve {
-    fn start(mut self) -> PeerEventTxChannel<()> {
+    fn start(mut self) -> DownstreamPeerEventTx {
         let tx = self.halve.tx.clone();
         let task = move || async move {
             info!(
@@ -248,7 +254,7 @@ impl DownstreamPeerStreamHalve {
 }
 
 impl DownstreamPeerSinkHalve {
-    fn start(mut self) -> PeerEventTxChannel<()> {
+    fn start(mut self) -> DownstreamPeerEventTx {
         let tx = self.halve.tx.clone();
         let task = move || async move {
             info!(

@@ -1,31 +1,28 @@
+use crate::downstream::PeerRuntime;
+use crate::upstream_proto::{
+    upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
+    OutputStreamRequest, ReadyRequest,
+};
 use crate::{
     downstream::PeerError,
     runtime::{
-        send_message_to_runtime, PeerEvent, PeerEventTxChannel, PeerMetadata, Runtime,
-        RuntimeEvent, RuntimeEventUpstream, RuntimeOrderTxChannel,
-    },
-};
-use crate::{downstream::PeerRuntime, runtime::PeerHalve};
-use crate::{
-    runtime::PeerEventRxChannel,
-    upstream_proto::{
-        upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
-        OutputStreamRequest, ReadyRequest, ReadyResult,
+        send_message_to_runtime, PeerEvent, PeerMetadata, Runtime, RuntimeEvent,
+        RuntimeEventUpstream, RuntimeOrderTxChannel,
     },
 };
 use async_trait::async_trait;
 use enclose::enclose;
 use futures::Stream;
-use std::{borrow::BorrowMut, fmt::Debug, net::SocketAddr, pin::Pin};
-use tokio::{self, task::JoinHandle};
+use std::{fmt::Debug, net::SocketAddr, pin::Pin};
+use tokio::{self, sync::mpsc::Receiver, sync::mpsc::Sender, task::JoinHandle};
 use tonic::Status;
 use uuid::Uuid;
 
 type UpstreamPeerInputRequest = InputStreamRequest;
 type UpstreamPeerOuputRequest = OutputStreamRequest;
 
-pub type UpstreamPeerStreamChannelTx = PeerEventTxChannel<String>;
-pub type UpstreamPeerSinkChannelTx = PeerEventTxChannel<String>;
+// pub type UpstreamPeerStreamChannelTx = PeerEventTxChannel<String>;
+// pub type UpstreamPeerSinkChannelTx = PeerEventTxChannel<String>;
 
 pub enum UpstreamPeerMetadataError {
     HostInvalid,
@@ -41,23 +38,46 @@ pub enum UpstreamPeerError {
     RuntimeAbortOrder,
 }
 
+type UpstreamPeerEvent = PeerEvent<(String, Header)>;
+pub type UpstreamPeerEventTx = Sender<UpstreamPeerEvent>;
+pub type UpstreamPeerEventRx = Receiver<UpstreamPeerEvent>;
+
+pub struct UpstreamPeerHalve {
+    pub metadata: PeerMetadata,
+    pub runtime_tx: RuntimeOrderTxChannel,
+    pub rx: UpstreamPeerEventRx,
+    pub tx: UpstreamPeerEventTx,
+}
+
+impl UpstreamPeerHalve {
+    pub fn new(uuid: String, runtime_tx: RuntimeOrderTxChannel, socket_addr: SocketAddr) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+        Self {
+            metadata: PeerMetadata { uuid, socket_addr },
+            runtime_tx,
+            rx,
+            tx,
+        }
+    }
+}
+
 pub struct UpstreamPeerPending {
-    pub stream_halve: PeerHalve<String>,
-    pub sink_halve: PeerHalve<String>,
+    pub stream_halve: UpstreamPeerHalve,
+    pub sink_halve: UpstreamPeerHalve,
 }
 
 /// Once the client has passed the Ready request of gRPC
 pub struct UpstreamPeerWaitReadiness {
-    pub stream_halve: PeerHalve<String>,
-    pub sink_halve: PeerHalve<String>,
+    pub stream_halve: UpstreamPeerHalve,
+    pub sink_halve: UpstreamPeerHalve,
     pub client: UpstreamPeerServiceClient<tonic::transport::Channel>,
 }
 
 type UpstreamBiStreamingSender = tokio::sync::mpsc::Sender<UpstreamPeerInputRequest>;
 
 pub struct UpstreamPeerReady {
-    pub stream_halve: PeerHalve<String>,
-    pub sink_halve: PeerHalve<String>,
+    pub stream_halve: UpstreamPeerHalve,
+    pub sink_halve: UpstreamPeerHalve,
     pub client: UpstreamPeerServiceClient<tonic::transport::Channel>, // useful to receive data
 }
 
@@ -146,9 +166,10 @@ impl UpstreamPeerStateTransition for UpstreamPeerWaitReadiness {
 impl UpstreamPeer<UpstreamPeerPending> {
     pub fn new(metadata: &UpstreamPeerMetadata, runtime_tx: RuntimeOrderTxChannel) -> Self {
         debug!("Creating upstream peer halves");
-        let uuid = Uuid::new_v4();
-        let stream_halve = PeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host.clone());
-        let sink_halve = PeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host.clone());
+        let uuid = Uuid::new_v4().to_string();
+        let stream_halve =
+            UpstreamPeerHalve::new(uuid.clone(), runtime_tx.clone(), metadata.host.clone());
+        let sink_halve = UpstreamPeerHalve::new(uuid, runtime_tx.clone(), metadata.host.clone());
 
         UpstreamPeer {
             state: UpstreamPeerPending {
@@ -160,8 +181,8 @@ impl UpstreamPeer<UpstreamPeerPending> {
 }
 
 pub struct UpstreamPeerStarted {
-    pub sink_tx: PeerEventTxChannel<String>,
-    pub stream_tx: PeerEventTxChannel<String>,
+    pub sink_tx: UpstreamPeerEventTx,
+    pub stream_tx: UpstreamPeerEventTx,
     pub metadata: PeerMetadata,
 }
 
@@ -288,7 +309,7 @@ impl Drop for MyStreamClientGRPC {
 
 async fn upstream_start_stream_runtime(
     metadata: PeerMetadata,
-    mut rx: PeerEventRxChannel<String>,
+    mut rx: UpstreamPeerEventRx,
     runtime_tx: RuntimeOrderTxChannel,
     mut bi_stream_rx: MyStreamClientGRPC,
 ) {
@@ -298,7 +319,7 @@ async fn upstream_start_stream_runtime(
     // <bool>true is returned if the runtime has closed or if the upstream should close (order coming from runtime)
     let runtime_order_resolution = enclose!(
         (mut runtime_tx, metadata)
-        move |runtime_order: Option<PeerEvent<(String, String)>>, paused: &mut bool| -> Result<(), UpstreamPeerError> {
+        move |runtime_order: Option<UpstreamPeerEvent>, paused: &mut bool| -> Result<(), UpstreamPeerError> {
         if let Some(order) = runtime_order {
             trace!("Received runtime order [{:?}] for upstream stream [{}]", order, metadata.uuid.clone());
             match order {
@@ -405,7 +426,7 @@ async fn upstream_start_stream_runtime(
 async fn upstream_start_sink_runtime(
     metadata: PeerMetadata,
     runtime_tx: RuntimeOrderTxChannel,
-    mut rx: PeerEventRxChannel<String>,
+    mut rx: UpstreamPeerEventRx,
     mut bi_stream_tx: UpstreamBiStreamingSender,
 ) {
     debug!("[Starting upstream sink runtime]");
@@ -594,16 +615,9 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     upstream_peers
 }
 
-pub fn prepare_upstream_sink_request(payload: String, uuid: String) -> InputStreamRequest {
-    let address = String::from("127.0.0.1");
-    let time = String::from("14:12:44");
-
+pub fn prepare_upstream_sink_request(payload: String, header: Header) -> InputStreamRequest {
     let request = InputStreamRequest {
-        header: Option::Some(Header {
-            client_uuid: uuid, //TODO change it correctly ....
-            address,
-            time,
-        }),
+        header: Option::Some(header),
         payload,
     };
 

@@ -1,7 +1,4 @@
-use crate::runtime::{
-    PeerEventRxChannel, PeerEventTxChannel, PeerMetadata, RuntimeEvent, RuntimeOrderRxChannel,
-    RuntimeOrderTxChannel,
-};
+use crate::runtime::{PeerMetadata, RuntimeEvent, RuntimeOrderRxChannel, RuntimeOrderTxChannel};
 use futures_core::Stream;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -40,12 +37,12 @@ pub fn compile_protos() {
 
 include!("../generated/upstream.grpc.service.rs");
 
-pub struct UpstreamPeerServiceImpl {
-    rt_tx: RuntimeOrderTxChannel, // to send messages to downstream (frontend peeers)
-    rt_rx: RuntimeOrderRxChannel, // to receive stop order (close connection with backeend peer)...
-    backend_peer_tx: PeerEventTxChannel<PeerMetadata>, // channel to use on runtime to send a new message to upstream (backend peer)
-    backend_peer_rx: PeerEventRxChannel<PeerMetadata>, // channel to receive message to sink
-}
+// pub struct UpstreamPeerServiceImpl {
+//     rt_tx: RuntimeOrderTxChannel, // to send messages to downstream (frontend peeers)
+//     rt_rx: RuntimeOrderRxChannel, // to receive stop order (close connection with backeend peer)...
+//     backend_peer_tx: PeerEventTxChannel<PeerMetadata>, // channel to use on runtime to send a new message to upstream (backend peer)
+//     backend_peer_rx: PeerEventRxChannel<PeerMetadata>, // channel to receive message to sink
+// }
 
 // /// DEBUGGING PURPOSES
 // #[tonic::async_trait]
