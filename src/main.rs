@@ -14,6 +14,7 @@ extern crate enclose;
 extern crate uuid;
 
 pub mod admin_management_server;
+pub mod conf;
 pub mod downstream;
 pub mod runtime;
 pub mod upstream;
@@ -23,6 +24,7 @@ pub mod utils;
 use crate::runtime::PeerEvent;
 use admin_management_server::start_http_management_server;
 use anyhow::{anyhow, Result};
+use conf::load_config;
 use downstream::{DownstreamPeer, DownstreamPeerEventTx, PeerRuntime};
 use futures::StreamExt;
 use runtime::{PeerMetadata, Runtime, RuntimePeersPool};
@@ -145,13 +147,16 @@ async fn main() {
     init_logging().unwrap();
 
     let mut runtime = Runtime::new();
-    register_upstream_peers(runtime.tx.clone()).await;
-    start_http_management_server(runtime.tx.clone());
+    let conf = load_config().unwrap();
+    register_upstream_peers(runtime.tx.clone(), &conf.upstreams).await;
+    start_http_management_server(
+        runtime.tx.clone(),
+        &conf.management_server,
+        conf.management_server_tls.as_ref(),
+    );
 
-    let port = 7999;
-    let uri = "0.0.0.0";
-    let addr = format!("{}:{}", uri, port);
-    debug!("[URI] = {} && [PORT] = {}", &uri, port);
+    let addr = format!("{}:{}", conf.server.host, conf.server.port);
+    debug!("Listening on [{:?}]", &addr);
 
     let listener_res = TcpListener::bind(addr.clone());
     let lb_server = async move {

@@ -1,10 +1,21 @@
-[default]
+[server]
+host = "0.0.0.0"
+port = 7999
 
-[upstreams]
+[[upstream]]
+host = "127.0.0.1"
+port = 45888
+
+[[upstream]]
+host = "127.0.0.1"
+port = 45887
 
 [management_server]
 host = "0.0.0.0"
-port = "6900"
+
+# Make sure to refer to https://docs.rs/rocket/0.4.5/rocket/config/enum.LoggingLevel.html
+# log_level = "trace"
+port = 8000
 
 [management_server.tls]
 cert_path = ""

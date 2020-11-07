@@ -1,4 +1,4 @@
-use crate::{runtime::RuntimeOrderTxChannel, RuntimePeersPool};
+use crate::{conf, runtime::RuntimeOrderTxChannel, RuntimePeersPool};
 use rocket::routes;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -71,8 +71,36 @@ pub mod admin {}
 /// Start a warp web server for administration purposes
 /// Administration management includes:
 /// - CRUD on upstream peers
-pub fn start_http_management_server(runtime_tx: RuntimeOrderTxChannel) {
+pub fn start_http_management_server(
+    runtime_tx: RuntimeOrderTxChannel,
+    conf: &conf::ManagementServer,
+    tls_conf: Option<&conf::ManagementServerTls>,
+) {
     debug!("Starting http management server");
+
+    let default_rocket_config =
+        rocket::config::Config::active().expect("Failed to load default rocket config, leaving");
+    let mut rocket_config = rocket::config::Config::new(default_rocket_config.environment);
+
+    rocket_config.set_port(conf.port);
+    rocket_config.set_address(conf.host.clone());
+
+    if let Some(log_level) = conf.log_level.as_ref() {
+        debug!("Setting log level for Rocket");
+        if let Ok(log_level) = log_level.parse::<rocket::config::LoggingLevel>() {
+            rocket_config.set_log_level(log_level);
+        } else {
+            panic!("Failed to parse the log level")
+        }
+    }
+
+    if let Some(tls_conf) = tls_conf {
+        debug!("Setting tls for rocket");
+        if let Err(err) = rocket_config.set_tls(&tls_conf.cert_path, &tls_conf.key_path) {
+            panic!("Failed to configure TLS for Rocket, {:?}", err);
+        }
+    }
+    // rocket_config.set_tls(, )
 
     let task = || async move {
         rocket::ignite()

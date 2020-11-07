@@ -1,8 +1,8 @@
-use crate::downstream::PeerRuntime;
 use crate::upstream_proto::{
     upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
     OutputStreamRequest, ReadyRequest,
 };
+use crate::{conf, downstream::PeerRuntime};
 use crate::{
     downstream::PeerError,
     runtime::{
@@ -92,6 +92,16 @@ where
 pub struct UpstreamPeerMetadata {
     pub host: SocketAddr,
     pub alive_timeout: usize,
+}
+
+impl UpstreamPeerMetadata {
+    pub fn from(from: &conf::Upstream) -> anyhow::Result<Self> {
+        let addr: SocketAddr = format!("{}:{}", from.host, from.port).parse::<SocketAddr>()?;
+        Ok(Self {
+            host: addr,
+            alive_timeout: from.alive_timeout as usize,
+        })
+    }
 }
 
 #[async_trait]
@@ -509,15 +519,28 @@ async fn upstream_start_sink_runtime(
 /// Register all upstream peers from a source
 /// All wrapped into a separate task
 /// Each upstream peer initialization are also wrapped into a different task
-pub async fn register_upstream_peers(mut runtime_tx: RuntimeOrderTxChannel) {
-    let upstream_peer_metadata = get_upstream_peers();
+pub async fn register_upstream_peers(
+    mut runtime_tx: RuntimeOrderTxChannel,
+    upstreams: &Vec<conf::Upstream>,
+) {
+    // let upstream_peer_metadata = get_upstream_peers();
 
-    for upstream_peer_metadata in upstream_peer_metadata {
-        let runtime_order =
-            RuntimeEvent::Upstream(RuntimeEventUpstream::Register(upstream_peer_metadata));
+    for upstream in upstreams {
+        match UpstreamPeerMetadata::from(&upstream) {
+            Ok(upstream) => {
+                let runtime_order =
+                    RuntimeEvent::Upstream(RuntimeEventUpstream::Register(upstream));
 
-        if let Err(err) = runtime_tx.send(runtime_order).await {
-            error!("Failed to register upstream peers, cause : [{:?}]", err);
+                if let Err(err) = runtime_tx.send(runtime_order).await {
+                    error!("Failed to register upstream peers, cause : [{:?}]", err);
+                }
+            }
+            Err(err) => {
+                error!(
+                    "Failed to register the following upstream : [{:?}], cause: [{:?}]",
+                    &upstream, err
+                );
+            }
         }
     }
 }
