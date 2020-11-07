@@ -18,6 +18,7 @@ pub mod downstream;
 pub mod runtime;
 pub mod upstream;
 pub mod upstream_proto;
+// pub mod upstream_proto;
 pub mod utils;
 use crate::runtime::PeerEvent;
 use admin_management_server::start_http_management_server;
@@ -44,8 +45,9 @@ async fn dummy_task_for_writing_as_downstream_clients(
     loop {
         delay_for(Duration::from_secs(2)).await;
         let dummy_message = format!("DUMMY ANSWER {}", i);
+
         let res = peer_sink_tx_channel
-            .send(PeerEvent::Write((dummy_message, ())))
+            .send(PeerEvent::Write((dummy_message.into(), ())))
             .await;
         debug!("Sent message from dummy, res : {:?}", res);
         i = i + 1;
@@ -141,9 +143,6 @@ fn init_logging() -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() {
     init_logging().unwrap();
-
-    // Uncomment only to compile protos
-    // upstream_proto::compile_protos();
 
     let mut runtime = Runtime::new();
     register_upstream_peers(runtime.tx.clone()).await;

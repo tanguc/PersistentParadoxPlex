@@ -7,6 +7,8 @@ use crate::{
 use crate::upstream_proto::Header;
 
 use crate::downstream::DownstreamPeerEventTx;
+use bytes::Bytes;
+use std::sync::Arc;
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
@@ -16,8 +18,6 @@ use std::{
     hash::Hash,
     hash::Hasher,
 };
-
-use std::sync::Arc;
 
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch, Mutex};
 use uuid::Uuid;
@@ -43,13 +43,13 @@ pub enum PeerEvent<T = ()> {
 pub enum RuntimeEventUpstream {
     Register(UpstreamPeerMetadata),
     TerminatedConnection(PeerMetadata),
-    Message(String, String),
+    Message(Bytes, String),
 }
 #[derive(Debug)]
 pub enum RuntimeEventDownstream {
     Register,
     TerminatedConnection(PeerMetadata),
-    Message(String, String),
+    Message(Bytes, String),
 }
 #[derive(Debug)]
 pub enum RuntimeEventAdmin {

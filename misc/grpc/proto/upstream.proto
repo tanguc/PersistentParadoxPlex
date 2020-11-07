@@ -4,9 +4,9 @@ package upstream.grpc.service;
 
 service UpstreamPeerService {
   rpc bidirectionalStreaming(stream InputStreamRequest)
-      returns (stream OutputStreamRequest) {}
-  rpc ready(ReadyRequest) returns (ReadyResult);
-  rpc live(stream LiveRequest) returns (stream LiveResult);
+      returns(stream OutputStreamRequest) {}
+  rpc ready(ReadyRequest) returns(ReadyResult);
+  rpc live(stream LiveRequest) returns(stream LiveResult);
 }
 
 message ReadyRequest {
@@ -39,10 +39,10 @@ message Header {
 
 message InputStreamRequest {
   Header header = 1;
-  string payload = 2;
+  bytes payload = 2;
 }
 
 message OutputStreamRequest {
   Header header = 1;
-  string payload = 2;
+  bytes payload = 2;
 }

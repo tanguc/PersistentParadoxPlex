@@ -20,6 +20,16 @@ We aim to support these features:
 - Health checking (How are my upstream servers)
 - Load balancing (distribute equally stuffs)
 
+## Features
+- Unique UUID generated for downstream peers (TCP clients) and marked by us
+- Round Robin like heuristic for distribution to upstreams
+- gRPC connections to upstreams (which could be behind a kubernetes)
+- Health checking of upstreams
+- Live check of upstreams
+- Dynamic upstreams peers control (for administrative purposes) via HTTP req
+- Dynamic downstreams peers control (TODO) via HTTP req
+- Dynamic runtime control (TODO) via HTTP req
+- Protobuf generation of each languages (via google protobuf codegen)
 
 ## What for ?
 
@@ -40,7 +50,7 @@ will exist during the whole lifetime of the socket itself.
 
 Thus this load balancer is not aimed to be used as a completely stateless
 component but much more as a bridge between raw TCP sockets,
-tagging them and finally multiplexing them to upstreams servers.  
+tagging them and finally multiplexing them to upstreams servers.
 
 ## Recommendations
 
@@ -49,7 +59,7 @@ we recommend to add a `Round-Robin DNS` like mechanism in the front of this
 /these load(s) balancer(s), our main concerns is we would like to avoid VRRP
 /CARP protocols and let external networking mechanism to handle load balancers.
 Our main goal is to bring actual tools & technologies, to tie them and give a
-simple solution.
+simple solution. // NOTE the load balancer is aimed to be unique but still can be deployed multiple times, careful each load balancer have their own TCP sockets and do not share them between load balancers   
  
  ## Architecture overview
  
@@ -86,4 +96,9 @@ To add:
 
 - need to know:
   - in the case of multiples load balancers (N), upstreams will be have one connection for each load balancers (N), relation N to N, the same for load balancers (N upstreams will have N connections on each load balancer), finally N*N connections in the big picture
-  -  
+
+
+
+
+##### => Generated file must reside inside the "generated" folder (from protobuf file)
+##### =>  

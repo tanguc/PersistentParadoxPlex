@@ -3,18 +3,22 @@ use crate::runtime::{
     RuntimeEventDownstream, RuntimeOrderTxChannel,
 };
 use async_trait::async_trait;
-use futures::{sink::SinkExt, stream::StreamExt};
+use bytes::{Bytes, BytesMut};
+use futures::{
+    sink::SinkExt,
+    stream::{SplitSink, SplitStream, StreamExt},
+};
 use std::{fmt::Formatter, net::SocketAddr};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio_util::codec::{Framed, LinesCodec};
+use tokio_util::codec::{BytesCodec, Framed};
 use uuid::Uuid;
 
-pub type DownstreamPeerEventTx = tokio::sync::mpsc::Sender<PeerEvent<(String, ())>>;
-pub type DownstreamPeerEventRx = tokio::sync::mpsc::Receiver<PeerEvent<(String, ())>>;
+pub type DownstreamPeerEventTx = tokio::sync::mpsc::Sender<PeerEvent<(Bytes, ())>>;
+pub type DownstreamPeerEventRx = tokio::sync::mpsc::Receiver<PeerEvent<(Bytes, ())>>;
 
-pub type DownstreamTcpSink = futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>;
-pub type DownstreamTcpStream = futures::stream::SplitStream<Framed<TcpStream, LinesCodec>>;
+pub type DownstreamTcpSink = futures::stream::SplitSink<Framed<TcpStream, BytesCodec>, Bytes>;
+pub type DownstreamTcpStream = futures::stream::SplitStream<Framed<TcpStream, BytesCodec>>;
 
 pub struct DownstreamPeerHalve {
     pub metadata: PeerMetadata,
@@ -81,8 +85,11 @@ impl DownstreamPeer {
         socket_addr: SocketAddr,
         runtime_tx: RuntimeOrderTxChannel,
     ) -> Self {
-        let frame = Framed::new(tcp_stream, LinesCodec::new());
-        let (tcp_sink, tcp_stream) = frame.split::<String>();
+        let frame = Framed::new(tcp_stream, BytesCodec::new());
+        let (tcp_sink, tcp_stream): (
+            SplitSink<Framed<TcpStream, BytesCodec>, bytes::Bytes>,
+            SplitStream<Framed<TcpStream, BytesCodec>>,
+        ) = frame.split();
         let uuid = Uuid::new_v4().to_string();
 
         let peer_sink: DownstreamPeerSinkHalve = DownstreamPeerSinkHalve::new(
@@ -124,7 +131,7 @@ pub struct DownstreamPeerFinalState {
 
 impl DownstreamPeerSinkHalve {
     pub fn new(
-        tcp_sink: futures::stream::SplitSink<Framed<TcpStream, LinesCodec>, String>,
+        tcp_sink: DownstreamTcpSink,
         uuid: String,
         runtime_tx: RuntimeOrderTxChannel,
         socket_addr: SocketAddr,
@@ -194,7 +201,7 @@ impl DownstreamPeerStreamHalve {
                             debug!("Got a new line : {:?}", line);
                             let runtime_order =
                                 RuntimeEvent::Downstream(RuntimeEventDownstream::Message(
-                                    line,
+                                    line.into(),
                                     self.halve.metadata.uuid.clone().to_string(),
                                 ));
 

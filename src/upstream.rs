@@ -11,6 +11,7 @@ use crate::{
     },
 };
 use async_trait::async_trait;
+use bytes::Bytes;
 use enclose::enclose;
 use futures::Stream;
 use std::{fmt::Debug, net::SocketAddr, pin::Pin};
@@ -38,7 +39,7 @@ pub enum UpstreamPeerError {
     RuntimeAbortOrder,
 }
 
-type UpstreamPeerEvent = PeerEvent<(String, Header)>;
+type UpstreamPeerEvent = PeerEvent<(Bytes, Header)>;
 pub type UpstreamPeerEventTx = Sender<UpstreamPeerEvent>;
 pub type UpstreamPeerEventRx = Receiver<UpstreamPeerEvent>;
 
@@ -359,7 +360,7 @@ async fn upstream_start_stream_runtime(
                         if let Some(header) = req_message.header {
                             let runtime_event = RuntimeEvent::Upstream(
                                 RuntimeEventUpstream::Message(
-                                    req_message.payload, header.client_uuid.clone()
+                                    req_message.payload.into(), header.client_uuid.clone()
                                 )
                             );
                             send_message_to_runtime(runtime_tx, metadata, runtime_event)
@@ -615,10 +616,10 @@ fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
     upstream_peers
 }
 
-pub fn prepare_upstream_sink_request(payload: String, header: Header) -> InputStreamRequest {
+pub fn prepare_upstream_sink_request(payload: Bytes, header: Header) -> InputStreamRequest {
     let request = InputStreamRequest {
         header: Option::Some(header),
-        payload,
+        payload: (*payload).into(),
     };
 
     return request;
