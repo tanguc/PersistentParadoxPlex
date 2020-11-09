@@ -15,7 +15,8 @@ pub mod upstream {
         pub struct AddUpstream {
             pub host: String,
             pub port: usize,
-            pub alive_timeout: usize,
+            pub alive_timeout: u32,
+            pub ready_timeout: u32,
         }
     }
     use crate::{
@@ -35,6 +36,7 @@ pub mod upstream {
                 RuntimeEvent::Upstream(RuntimeEventUpstream::Register(UpstreamPeerMetadata {
                     host: addr_parsed,
                     alive_timeout: metadata.alive_timeout,
+                    ready_timeout: metadata.ready_timeout,
                 }));
             if let Err(err) = runtime_tx.inner().clone().try_send(runtime_order) {
                 match err {
@@ -83,7 +85,9 @@ pub fn start_http_management_server(
     let mut rocket_config = rocket::config::Config::new(default_rocket_config.environment);
 
     rocket_config.set_port(conf.port);
-    rocket_config.set_address(conf.host.clone());
+    if let Err(_) = rocket_config.set_address(conf.host.clone()) {
+        panic!("Failed to parse the IP address from [{:?}]", &conf.host);
+    }
 
     if let Some(log_level) = conf.log_level.as_ref() {
         debug!("Setting log level for Rocket");

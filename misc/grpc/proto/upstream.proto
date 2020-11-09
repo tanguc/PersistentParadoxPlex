@@ -1,33 +1,24 @@
 syntax = "proto3";
 
+option go_package = "persistent_marking_lb/proto";
+
 package upstream.grpc.service;
+import "empty.proto";
 
 service UpstreamPeerService {
   rpc bidirectionalStreaming(stream InputStreamRequest)
       returns(stream OutputStreamRequest) {}
-  rpc ready(ReadyRequest) returns(ReadyResult);
-  rpc live(stream LiveRequest) returns(stream LiveResult);
-}
-
-message ReadyRequest {
-  Header header = 1;
-  string ready = 2;
-  // ^^^^^^
-  // ||||||
-  // because https://github.com/tokopedia/gripmock/ have been coded by looser
-  // and they cant handle match of regexp on anything other than string, you
-  // sucks. TODO delete when wel'll get ride out of these tools.
+  rpc ready(google.protobuf.Empty) returns(ReadyResult);
+  rpc live(stream google.protobuf.Empty) returns(stream LiveResult);
 }
 
 message ReadyResult {
-  Header header = 1;
+  string time = 1;
   bool ready = 2;
 }
 
-message LiveRequest { Header header = 1; }
-
 message LiveResult {
-  Header header = 1;
+  string time = 1;
   bool live = 2;
 }
 

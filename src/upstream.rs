@@ -1,6 +1,6 @@
 use crate::upstream_proto::{
     upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
-    OutputStreamRequest, ReadyRequest,
+    OutputStreamRequest,
 };
 use crate::{conf, downstream::PeerRuntime};
 use crate::{
@@ -15,15 +15,14 @@ use bytes::Bytes;
 use enclose::enclose;
 use futures::Stream;
 use std::{fmt::Debug, net::SocketAddr, pin::Pin};
-use tokio::{self, sync::mpsc::Receiver, sync::mpsc::Sender, task::JoinHandle};
+use tokio::{self, sync::mpsc::Receiver, sync::mpsc::Sender, task::JoinHandle, time};
 use tonic::Status;
 use uuid::Uuid;
 
 type UpstreamPeerInputRequest = InputStreamRequest;
 type UpstreamPeerOuputRequest = OutputStreamRequest;
 
-// pub type UpstreamPeerStreamChannelTx = PeerEventTxChannel<String>;
-// pub type UpstreamPeerSinkChannelTx = PeerEventTxChannel<String>;
+type UpstreamBiStreamingSender = tokio::sync::mpsc::Sender<UpstreamPeerInputRequest>;
 
 pub enum UpstreamPeerMetadataError {
     HostInvalid,
@@ -65,6 +64,8 @@ impl UpstreamPeerHalve {
 pub struct UpstreamPeerPending {
     pub stream_halve: UpstreamPeerHalve,
     pub sink_halve: UpstreamPeerHalve,
+    pub ready_timeout: u32,
+    pub alive_timeout: u32,
 }
 
 /// Once the client has passed the Ready request of gRPC
@@ -72,14 +73,14 @@ pub struct UpstreamPeerWaitReadiness {
     pub stream_halve: UpstreamPeerHalve,
     pub sink_halve: UpstreamPeerHalve,
     pub client: UpstreamPeerServiceClient<tonic::transport::Channel>,
+    pub ready_timeout: u32,
+    pub alive_timeout: u32,
 }
-
-type UpstreamBiStreamingSender = tokio::sync::mpsc::Sender<UpstreamPeerInputRequest>;
-
 pub struct UpstreamPeerReady {
     pub stream_halve: UpstreamPeerHalve,
     pub sink_halve: UpstreamPeerHalve,
     pub client: UpstreamPeerServiceClient<tonic::transport::Channel>, // useful to receive data
+    pub alive_timeout: u32,
 }
 
 pub struct UpstreamPeer<T>
@@ -91,7 +92,8 @@ where
 #[derive(Debug)]
 pub struct UpstreamPeerMetadata {
     pub host: SocketAddr,
-    pub alive_timeout: usize,
+    pub alive_timeout: u32,
+    pub ready_timeout: u32,
 }
 
 impl UpstreamPeerMetadata {
@@ -99,7 +101,8 @@ impl UpstreamPeerMetadata {
         let addr: SocketAddr = format!("{}:{}", from.host, from.port).parse::<SocketAddr>()?;
         Ok(Self {
             host: addr,
-            alive_timeout: from.alive_timeout as usize,
+            alive_timeout: from.alive_timeout,
+            ready_timeout: from.ready_timeout,
         })
     }
 }
@@ -113,6 +116,7 @@ pub trait UpstreamPeerStateTransition {
 #[async_trait]
 impl UpstreamPeerStateTransition for UpstreamPeerPending {
     type NextState = UpstreamPeerWaitReadiness;
+
     async fn next(self) -> Option<Self::NextState> {
         match UpstreamPeerServiceClient::connect(format!(
             "tcp://{}",
@@ -126,6 +130,8 @@ impl UpstreamPeerStateTransition for UpstreamPeerPending {
                     stream_halve: self.stream_halve,
                     sink_halve: self.sink_halve,
                     client,
+                    alive_timeout: self.alive_timeout,
+                    ready_timeout: self.ready_timeout,
                 })
             }
             Err(err) => {
@@ -139,34 +145,42 @@ impl UpstreamPeerStateTransition for UpstreamPeerPending {
 #[async_trait]
 impl UpstreamPeerStateTransition for UpstreamPeerWaitReadiness {
     type NextState = UpstreamPeerReady;
-    async fn next(mut self) -> Option<Self::NextState> {
-        let ready_req = tonic::Request::new(ReadyRequest {
-            header: Some(Header {
-                address: "127.0.0.1".into(),
-                client_uuid: "NIL".into(),
-                time: "21:23:12".into(),
-            }),
-            ready: String::from("false"),
-        });
 
-        match self.client.ready(ready_req).await {
-            Ok(is_ready) => {
-                if is_ready.get_ref().ready {
-                    debug!("[Upstream is ready]");
-                    return Some(UpstreamPeerReady {
-                        stream_halve: self.stream_halve,
-                        sink_halve: self.sink_halve,
-                        client: self.client,
-                    });
-                } else {
-                    todo!("[Upstream readiness] Retry again until limit");
+    async fn next(mut self) -> Option<Self::NextState> {
+        let timeout = time::timeout(
+            tokio::time::Duration::from_secs(self.ready_timeout.into()),
+            self.client.ready(()),
+        )
+        .await;
+
+        match timeout {
+            Ok(value) => match value {
+                Ok(is_ready) => {
+                    if is_ready.get_ref().ready {
+                        debug!("[Upstream is ready]");
+                        return Some(UpstreamPeerReady {
+                            stream_halve: self.stream_halve,
+                            sink_halve: self.sink_halve,
+                            client: self.client,
+                            alive_timeout: self.alive_timeout,
+                        });
+                    } else {
+                        todo!("[Upstream readiness] Retry again until limit");
+                    }
                 }
-            }
+                Err(err) => {
+                    error!(
+                        "Failed to send a ready request to the upstream [{}], reason: [{:?}]",
+                        self.stream_halve.metadata.uuid.clone(),
+                        err
+                    );
+                    None
+                }
+            },
             Err(err) => {
                 error!(
-                    "Failed to send a ready request to the upstream [{}], reason: [{:?}]",
-                    self.stream_halve.metadata.uuid.clone(),
-                    err
+                    "Upstream [{:?}] failed to send his readiness in [{}] seconds",
+                    &self.sink_halve.metadata.uuid, self.ready_timeout
                 );
                 None
             }
@@ -186,6 +200,8 @@ impl UpstreamPeer<UpstreamPeerPending> {
             state: UpstreamPeerPending {
                 stream_halve,
                 sink_halve,
+                alive_timeout: metadata.alive_timeout,
+                ready_timeout: metadata.ready_timeout,
             },
         }
     }
@@ -519,30 +535,31 @@ async fn upstream_start_sink_runtime(
 /// Register all upstream peers from a source
 /// All wrapped into a separate task
 /// Each upstream peer initialization are also wrapped into a different task
-pub async fn register_upstream_peers(
+pub fn register_upstream_peers(
     mut runtime_tx: RuntimeOrderTxChannel,
-    upstreams: &Vec<conf::Upstream>,
+    upstreams: Vec<conf::Upstream>,
 ) {
-    // let upstream_peer_metadata = get_upstream_peers();
+    let task = move || async move {
+        for upstream in upstreams {
+            match UpstreamPeerMetadata::from(&upstream) {
+                Ok(upstream) => {
+                    let runtime_order =
+                        RuntimeEvent::Upstream(RuntimeEventUpstream::Register(upstream));
 
-    for upstream in upstreams {
-        match UpstreamPeerMetadata::from(&upstream) {
-            Ok(upstream) => {
-                let runtime_order =
-                    RuntimeEvent::Upstream(RuntimeEventUpstream::Register(upstream));
-
-                if let Err(err) = runtime_tx.send(runtime_order).await {
-                    error!("Failed to register upstream peers, cause : [{:?}]", err);
+                    if let Err(err) = runtime_tx.send(runtime_order).await {
+                        error!("Failed to register upstream peers, cause : [{:?}]", err);
+                    }
+                }
+                Err(err) => {
+                    error!(
+                        "Failed to register the following upstream : [{:?}], cause: [{:?}]",
+                        &upstream, err
+                    );
                 }
             }
-            Err(err) => {
-                error!(
-                    "Failed to register the following upstream : [{:?}], cause: [{:?}]",
-                    &upstream, err
-                );
-            }
         }
-    }
+    };
+    tokio::spawn(task());
 }
 
 // // impl PeerRuntime for UpstreamPeer<InputStreamRequest> {
@@ -611,33 +628,35 @@ pub async fn register_upstream_peers(
 // //     }
 // // }
 
-fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
-    debug!("Creating backend peers [DEBUGGING PURPOSES]");
+// fn get_upstream_peers() -> Vec<UpstreamPeerMetadata> {
+//     debug!("Creating backend peers [DEBUGGING PURPOSES]");
 
-    let mut upstream_peers = vec![];
+//     let mut upstream_peers = vec![];
 
-    upstream_peers.push(UpstreamPeerMetadata {
-        host: "127.0.0.1:45888"
-            .parse()
-            .map_err(|err| {
-                error!("Could not parse addr: [{:?}]", err);
-            })
-            .unwrap(),
-        alive_timeout: 30,
-    });
+//     upstream_peers.push(UpstreamPeerMetadata {
+//         host: "127.0.0.1:45888"
+//             .parse()
+//             .map_err(|err| {
+//                 error!("Could not parse addr: [{:?}]", err);
+//             })
+//             .unwrap(),
+//         alive_timeout: 30,
+//         ready_timeout: 30,
+//     });
 
-    upstream_peers.push(UpstreamPeerMetadata {
-        host: "127.0.0.1:45887"
-            .parse()
-            .map_err(|err| {
-                error!("Fialed to parse addr [{:?}]", err);
-            })
-            .unwrap(),
-        alive_timeout: 30,
-    });
+//     upstream_peers.push(UpstreamPeerMetadata {
+//         host: "127.0.0.1:45887"
+//             .parse()
+//             .map_err(|err| {
+//                 error!("Fialed to parse addr [{:?}]", err);
+//             })
+//             .unwrap(),
+//         alive_timeout: 30,
+//         ready_timeout: 30,
+//     });
 
-    upstream_peers
-}
+//     upstream_peers
+// }
 
 pub fn prepare_upstream_sink_request(payload: Bytes, header: Header) -> InputStreamRequest {
     let request = InputStreamRequest {

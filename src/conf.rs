@@ -9,9 +9,15 @@ pub struct Upstream {
 
     #[serde(default = "default_upstream_alive_timeout")]
     pub alive_timeout: u32,
+
+    #[serde(default = "default_upstream_ready_timeout")]
+    pub ready_timeout: u32,
 }
 fn default_upstream_alive_timeout() -> u32 {
-    60
+    30
+}
+fn default_upstream_ready_timeout() -> u32 {
+    30
 }
 
 #[derive(Clone, Debug, Deserialize)]

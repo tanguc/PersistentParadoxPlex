@@ -6,9 +6,12 @@ port = 7999
 host = "127.0.0.1"
 port = 45888
 
-[[upstream]]
-host = "127.0.0.1"
-port = 45887
+alive_timeout = 30
+ready_timeout = 5
+
+# [[upstream]]
+# host = "127.0.0.1"
+# port = 45887
 
 [management_server]
 host = "0.0.0.0"

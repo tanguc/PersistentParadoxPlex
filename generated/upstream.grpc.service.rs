@@ -1,31 +1,14 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadyRequest {
-    #[prost(message, optional, tag = "1")]
-    pub header: ::std::option::Option<Header>,
-    /// ^^^^^^
-    /// ||||||
-    /// because https://github.com/tokopedia/gripmock/ have been coded by looser
-    /// and they cant handle match of regexp on anything other than string, you
-    /// sucks. TODO delete when wel'll get ride out of these tools.
-    #[prost(string, tag = "2")]
-    pub ready: std::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadyResult {
-    #[prost(message, optional, tag = "1")]
-    pub header: ::std::option::Option<Header>,
+    #[prost(string, tag = "1")]
+    pub time: std::string::String,
     #[prost(bool, tag = "2")]
     pub ready: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct LiveRequest {
-    #[prost(message, optional, tag = "1")]
-    pub header: ::std::option::Option<Header>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LiveResult {
-    #[prost(message, optional, tag = "1")]
-    pub header: ::std::option::Option<Header>,
+    #[prost(string, tag = "1")]
+    pub time: std::string::String,
     #[prost(bool, tag = "2")]
     pub live: bool,
 }
@@ -108,7 +91,7 @@ pub mod upstream_peer_service_client {
         }
         pub async fn ready(
             &mut self,
-            request: impl tonic::IntoRequest<super::ReadyRequest>,
+            request: impl tonic::IntoRequest<()>,
         ) -> Result<tonic::Response<super::ReadyResult>, tonic::Status> {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::new(
@@ -124,7 +107,7 @@ pub mod upstream_peer_service_client {
         }
         pub async fn live(
             &mut self,
-            request: impl tonic::IntoStreamingRequest<Message = super::LiveRequest>,
+            request: impl tonic::IntoStreamingRequest<Message = ()>,
         ) -> Result<tonic::Response<tonic::codec::Streaming<super::LiveResult>>, tonic::Status>
         {
             self.inner.ready().await.map_err(|e| {
@@ -173,7 +156,7 @@ pub mod upstream_peer_service_server {
         ) -> Result<tonic::Response<Self::bidirectionalStreamingStream>, tonic::Status>;
         async fn ready(
             &self,
-            request: tonic::Request<super::ReadyRequest>,
+            request: tonic::Request<()>,
         ) -> Result<tonic::Response<super::ReadyResult>, tonic::Status>;
         #[doc = "Server streaming response type for the live method."]
         type liveStream: Stream<Item = Result<super::LiveResult, tonic::Status>>
@@ -182,7 +165,7 @@ pub mod upstream_peer_service_server {
             + 'static;
         async fn live(
             &self,
-            request: tonic::Request<tonic::Streaming<super::LiveRequest>>,
+            request: tonic::Request<tonic::Streaming<()>>,
         ) -> Result<tonic::Response<Self::liveStream>, tonic::Status>;
     }
     #[derive(Debug)]
@@ -257,13 +240,10 @@ pub mod upstream_peer_service_server {
                 "/upstream.grpc.service.UpstreamPeerService/ready" => {
                     #[allow(non_camel_case_types)]
                     struct readySvc<T: UpstreamPeerService>(pub Arc<T>);
-                    impl<T: UpstreamPeerService> tonic::server::UnaryService<super::ReadyRequest> for readySvc<T> {
+                    impl<T: UpstreamPeerService> tonic::server::UnaryService<()> for readySvc<T> {
                         type Response = super::ReadyResult;
                         type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::ReadyRequest>,
-                        ) -> Self::Future {
+                        fn call(&mut self, request: tonic::Request<()>) -> Self::Future {
                             let inner = self.0.clone();
                             let fut = async move { inner.ready(request).await };
                             Box::pin(fut)
@@ -288,14 +268,14 @@ pub mod upstream_peer_service_server {
                 "/upstream.grpc.service.UpstreamPeerService/live" => {
                     #[allow(non_camel_case_types)]
                     struct liveSvc<T: UpstreamPeerService>(pub Arc<T>);
-                    impl<T: UpstreamPeerService> tonic::server::StreamingService<super::LiveRequest> for liveSvc<T> {
+                    impl<T: UpstreamPeerService> tonic::server::StreamingService<()> for liveSvc<T> {
                         type Response = super::LiveResult;
                         type ResponseStream = T::liveStream;
                         type Future =
                             BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
                         fn call(
                             &mut self,
-                            request: tonic::Request<tonic::Streaming<super::LiveRequest>>,
+                            request: tonic::Request<tonic::Streaming<()>>,
                         ) -> Self::Future {
                             let inner = self.0.clone();
                             let fut = async move { inner.live(request).await };

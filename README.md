@@ -73,14 +73,26 @@ simple solution. // NOTE the load balancer is aimed to be unique but still can b
 For development purposes, it's much better to have another peer which will respond
 to our messages, by sending a dummy message !
 
+For the sake of simplicity we recommend to use the following:
+https://github.com/tanguc/golang-grpc-server
+
+Make sure to have Golang installed in your host.
+
 To start the GRPC server:
 ``sh
-cd misc/grpc && sh start_stub_server.sh
+go run main.go --port YOUR_PORT_NUMBER 
 ``
 
-This is a docker container with the port `4770` open, which we'll use to call it from our runtime.
+## How to change the protobuf file for revisions/improves ?
 
+Protobuf's output is generated inside the sub project called `proto_gen` which is a simple cargo project which will generated Rust server/clients files from the defined protobuf file.
 
+```bash
+cd proto_gen && cargo run
+cp generated/upstream.grpc.service.rs ../generated/upstream.grpc.service.rs
+```
+
+You have now the newly generated Rust file with your revisions !
 
 ## Drafts
 

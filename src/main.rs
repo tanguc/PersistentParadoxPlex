@@ -148,7 +148,8 @@ async fn main() {
 
     let mut runtime = Runtime::new();
     let conf = load_config().unwrap();
-    register_upstream_peers(runtime.tx.clone(), &conf.upstreams).await;
+
+    register_upstream_peers(runtime.tx.clone(), conf.upstreams.to_owned());
     start_http_management_server(
         runtime.tx.clone(),
         &conf.management_server,
