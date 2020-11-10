@@ -22,18 +22,22 @@ message LiveResult {
   bool live = 2;
 }
 
-message Header {
-  string address = 1;
-  string time = 2;
-  string client_uuid = 3;
-}
-
+/// Request going from downstream (clients) to upstreams (servers)
 message InputStreamRequest {
-  Header header = 1;
-  bytes payload = 2;
+  string time = 1;
+  string client_uuid = 2;
+  bytes payload = 3;
 }
 
+/// Request going from upstream (servers) to downstreams (clients)
 message OutputStreamRequest {
-  Header header = 1;
-  bytes payload = 2;
+  string time = 1;
+  enum Broadcast {
+    BROADCAST_ALL = 0; BROADCAST_ACTIVE = 1; BROADCAST_NOT_ACTIVE = 2;
+  }
+  oneof target {
+    string client_uuid = 2;
+    Broadcast broadcast = 3;
+  }
+  bytes payload = 4;
 }

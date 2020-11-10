@@ -1,10 +1,11 @@
 use crate::{
     downstream::PeerRuntime,
-    upstream::{UpstreamPeer, UpstreamPeerEventTx, UpstreamPeerMetadata, UpstreamPeerStarted},
+    upstream::{
+        UpstreamEventContext, UpstreamPeer, UpstreamPeerEventTx, UpstreamPeerMetadata,
+        UpstreamPeerStarted,
+    },
     utils::round_robin,
 };
-
-use crate::upstream_proto::Header;
 
 use crate::downstream::DownstreamPeerEventTx;
 use bytes::Bytes;
@@ -44,6 +45,7 @@ pub enum RuntimeEventUpstream {
     Register(UpstreamPeerMetadata),
     TerminatedConnection(PeerMetadata),
     Message(Bytes, String),
+    Broadcast(Bytes),
 }
 #[derive(Debug)]
 pub enum RuntimeEventDownstream {
@@ -255,7 +257,29 @@ impl Runtime {
                     }
                 }
             }
+            RuntimeEventUpstream::Broadcast(payload) => {
+                /// Broadcast might be a long running and expensive operation in certain circumstances
+                /// that's why, a new tokio task will be spawn to handle these operations
+                debug!("ORDER - BROADCAST FROM UPSTREAM PEER ORDER");
+                let downstream_txs = self.get_downstream_broadcast_list().await;
+                let task = move || async move {
+                    for mut tx in downstream_txs {
+                        tx.send(PeerEvent::Write((payload.clone(), ()))).await;
+                    }
+                };
+
+                tokio::spawn(task());
+            }
         }
+    }
+
+    /// Get broadcast list for downstream peers (only sinks)
+    async fn get_downstream_broadcast_list(&self) -> Vec<DownstreamPeerEventTx> {
+        let lock = self.peers_pool.lock().await;
+        lock.downstream_peers_sink_tx
+            .iter()
+            .map(|(uuid, tx)| tx.clone())
+            .collect()
     }
 
     async fn handle_downstream_orders(
@@ -292,12 +316,11 @@ impl Runtime {
 
                     match next_upstream {
                         Some(mut tx) => {
-                            let header = Header {
-                                address: format!("{:?}", downstream_addr), // TODO fill with the current host address
-                                client_uuid: uuid.clone().to_string(),     //
-                                time: chrono::offset::Utc::now().to_rfc3339(), // TODO current time
-                            };
-                            let event = PeerEvent::Write((payload, header));
+                            let event = PeerEvent::Write(UpstreamEventContext {
+                                downstream_uuid: uuid.clone(),
+                                time: chrono::offset::Utc::now().to_rfc3339(),
+                                payload,
+                            });
 
                             // TODO if the channel is full, should reconsider to send to another upstream peer
                             if let Err(err) = tx.try_send(event) {

@@ -11,6 +11,7 @@ extern crate tokio_util;
 extern crate log;
 extern crate anyhow;
 extern crate enclose;
+extern crate num_enum;
 extern crate uuid;
 
 pub mod admin_management_server;

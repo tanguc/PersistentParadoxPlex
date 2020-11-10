@@ -1,6 +1,7 @@
 use crate::upstream_proto::{
-    upstream_peer_service_client::UpstreamPeerServiceClient, Header, InputStreamRequest,
-    OutputStreamRequest,
+    output_stream_request::{Broadcast, Target},
+    upstream_peer_service_client::UpstreamPeerServiceClient,
+    InputStreamRequest, OutputStreamRequest,
 };
 use crate::{conf, downstream::PeerRuntime};
 use crate::{
@@ -10,6 +11,7 @@ use crate::{
         RuntimeEventUpstream, RuntimeOrderTxChannel,
     },
 };
+use crate::{num_enum::UnsafeFromPrimitive, runtime::RuntimeError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use enclose::enclose;
@@ -38,7 +40,14 @@ pub enum UpstreamPeerError {
     RuntimeAbortOrder,
 }
 
-type UpstreamPeerEvent = PeerEvent<(Bytes, Header)>;
+#[derive(Debug)]
+pub struct UpstreamEventContext {
+    pub payload: Bytes,
+    pub downstream_uuid: String,
+    pub time: String,
+}
+
+type UpstreamPeerEvent = PeerEvent<UpstreamEventContext>;
 pub type UpstreamPeerEventTx = Sender<UpstreamPeerEvent>;
 pub type UpstreamPeerEventRx = Receiver<UpstreamPeerEvent>;
 
@@ -377,32 +386,60 @@ async fn upstream_start_stream_runtime(
             move |bi_stream_rx_resp: Option<OutputStreamRequest>, runtime_tx: RuntimeOrderTxChannel| {
                 let metadata = metadata.clone();
                 async move {
-                    if let Some(req_message) = bi_stream_rx_resp {
+                    if let Some(message) = bi_stream_rx_resp {
                         trace!(
                             "Upstream[{}] - message [{:?}]",
-                            metadata.uuid.clone(),
-                            req_message
+                            &metadata.uuid,
+                            message
                         );
-                        if let Some(header) = req_message.header {
-                            let runtime_event = RuntimeEvent::Upstream(
-                                RuntimeEventUpstream::Message(
-                                    req_message.payload.into(), header.client_uuid.clone()
-                                )
-                            );
-                            send_message_to_runtime(runtime_tx, metadata, runtime_event)
-                            .await
-                            .map_err(|err| () )
+                        if let Some(target) = message.target {
+                            let mut runtime_order = None;
+                            match target {
+                                Target::ClientUuid(client_uuid) => {
+                                    runtime_order = Some(RuntimeEvent::Upstream(
+                                        RuntimeEventUpstream::Message(
+                                            message.payload.into(), client_uuid
+                                        )
+                                    ));
+                                },
+                                Target::Broadcast(broadcast_indice) => {
+                                    let broadcast_type;
+                                    unsafe {
+                                        // should be fine :D
+                                        broadcast_type = Broadcast::from_unchecked(broadcast_indice);
+                                    }
+
+                                    match broadcast_type {
+                                        Broadcast::All => {
+                                            debug!("Broadcast all from upstream [{:?}]", &metadata.uuid);
+                                            runtime_order = Some(RuntimeEvent::Upstream(
+                                                RuntimeEventUpstream::Broadcast(message.payload.into())
+                                            ));
+                                        },
+                                        Broadcast::Active => {
+                                            warn!("Broadcast::Active is not implemented");
+                                        },
+                                        Broadcast::NotActive => {
+                                            warn!("Broadcast::NotActive is not implemented");
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(order) = runtime_order {
+                                return send_message_to_runtime(runtime_tx, metadata, order).await.map_err(|_| ());
+                                // () // should exit with error
+                            }
+                            ()
                         } else {
-                            warn!(
-                                "Upstream stream [{:?}] did not send any header in the message, skipping...",
-                                metadata.uuid.clone()
-                            );
-                            Ok(())
+                            warn!("Upstream peer [{:?}] did not specified a target, skipping the request",
+                                &metadata.uuid);
+                            ()
                         }
                     } else {
-                        error!("Received NONE from upstream, weird, resuming the runtime, please contact the developer");
-                        Ok(())
+                        warn!("Received NONE from upstream, weird, please contact the developer");
+                        ()
                     }
+                    Ok::<(), ()>(())
                 }
             }
     );
@@ -486,14 +523,17 @@ async fn upstream_start_sink_runtime(
                             metadata.uuid.clone()
                         );
                     }
-                    PeerEvent::Write((payload, from)) => {
+                    PeerEvent::Write(context) => {
                         debug!("[Upstream Write Event]");
                         if !paused {
                             //TODO would be much better to change the state of the sink loop
-                            let size = payload.len();
+                            let size = context.payload.len();
                             //TODO would be better to trace only with cfg(debug) mode
                             match bi_stream_tx
-                                .send(prepare_upstream_sink_request(payload, from.clone()))
+                                .send(prepare_upstream_sink_request(
+                                    context.payload,
+                                    context.downstream_uuid,
+                                ))
                                 .await
                             {
                                 Ok(_) => {
@@ -658,9 +698,13 @@ pub fn register_upstream_peers(
 //     upstream_peers
 // }
 
-pub fn prepare_upstream_sink_request(payload: Bytes, header: Header) -> InputStreamRequest {
+pub fn prepare_upstream_sink_request(
+    payload: Bytes,
+    downstream_uuid: String,
+) -> InputStreamRequest {
     let request = InputStreamRequest {
-        header: Option::Some(header),
+        client_uuid: downstream_uuid,
+        time: String::from("TOOEZIROZE"), //TODO use chrono or take it from runtime
         payload: (*payload).into(),
     };
 

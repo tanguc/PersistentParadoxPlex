@@ -1,6 +1,5 @@
-use futures_core::Stream;
 use std::path::PathBuf;
-use std::pin::Pin;
+use tonic_build;
 
 static OUT_DIR: &str = "./generated";
 
@@ -15,8 +14,9 @@ pub fn compile_protos() {
         );
         if let Err(err) = std::fs::create_dir_all(generated_folder.clone()) {
             panic!(
-                "Failed to create the folder [{:?}]",
-                generated_folder.clone().display()
+                "Failed to create the folder [{:?}], cause : [{:?}]",
+                generated_folder.clone().display(),
+                &err
             );
         }
     }
@@ -25,10 +25,25 @@ pub fn compile_protos() {
     let path = PathBuf::from(&protofile_path);
     println!(
         "Actual canonical path = [{:?}]",
-        &path.canonicalize().unwrap()
+        path.canonicalize().unwrap().parent().unwrap()
     );
+
     if path.exists() {
-        tonic_build::compile_protos(path).unwrap_or_else(|e| panic!("Failed to compile {:?}", e));
+        let builder = tonic_build::configure();
+        if let Err(err) = builder
+            .build_client(true)
+            .build_server(true)
+            .format(true)
+            // For num_enum crate
+            // https://docs.rs/num_enum/0.5.1/num_enum/derive.UnsafeFromPrimitive.html
+            .type_attribute("Broadcast", "#[derive(::num_enum::UnsafeFromPrimitive)]")
+            .compile(
+                &[path.canonicalize().unwrap().as_path()],
+                &[path.canonicalize().unwrap().parent().unwrap()],
+            )
+        {
+            println!("Failed to compile proto file : [{:?}]", &err);
+        }
     } else {
         panic!(
             "The protofile [{}] does not exist. Please check before trying to compile",

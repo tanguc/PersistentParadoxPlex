@@ -12,28 +12,42 @@ pub struct LiveResult {
     #[prost(bool, tag = "2")]
     pub live: bool,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Header {
-    #[prost(string, tag = "1")]
-    pub address: std::string::String,
-    #[prost(string, tag = "2")]
-    pub time: std::string::String,
-    #[prost(string, tag = "3")]
-    pub client_uuid: std::string::String,
-}
+//// Request going from downstream (clients) to upstreams (servers)
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InputStreamRequest {
-    #[prost(message, optional, tag = "1")]
-    pub header: ::std::option::Option<Header>,
-    #[prost(bytes, tag = "2")]
+    #[prost(string, tag = "1")]
+    pub time: std::string::String,
+    #[prost(string, tag = "2")]
+    pub client_uuid: std::string::String,
+    #[prost(bytes, tag = "3")]
     pub payload: std::vec::Vec<u8>,
 }
+//// Request going from upstream (servers) to downstreams (clients)
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OutputStreamRequest {
-    #[prost(message, optional, tag = "1")]
-    pub header: ::std::option::Option<Header>,
-    #[prost(bytes, tag = "2")]
+    #[prost(string, tag = "1")]
+    pub time: std::string::String,
+    #[prost(bytes, tag = "4")]
     pub payload: std::vec::Vec<u8>,
+    #[prost(oneof = "output_stream_request::Target", tags = "2, 3")]
+    pub target: ::std::option::Option<output_stream_request::Target>,
+}
+pub mod output_stream_request {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    #[derive(::num_enum::UnsafeFromPrimitive)]
+    pub enum Broadcast {
+        All = 0,
+        Active = 1,
+        NotActive = 2,
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(string, tag = "2")]
+        ClientUuid(std::string::String),
+        #[prost(enumeration = "Broadcast", tag = "3")]
+        Broadcast(i32),
+    }
 }
 #[doc = r" Generated client implementations."]
 pub mod upstream_peer_service_client {
