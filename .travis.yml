@@ -1,0 +1,6 @@
+language: rust
+rust:
+  - nightly
+language:
+  - 1.48.0
+cache: cargo
