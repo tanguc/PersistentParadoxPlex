@@ -1,3 +1,5 @@
+![Build and test](https://github.com/tanguc/PersistentMarkingLB/workflows/Build%20and%20test/badge.svg?branch=master)
+
 # persistent_marking_lb
 Give us some long lived TCP stuffs, and we'll mark it for you !
 
@@ -30,6 +32,10 @@ We aim to support these features:
 - Dynamic downstreams peers control (TODO) via HTTP req
 - Dynamic runtime control (TODO) via HTTP req
 - Protobuf generation of each languages (via google protobuf codegen)
+
+- Ready check for upstreams
+- Broadcast to all/active/inactive downstream peers
+- 
 
 ## What for ?
 
