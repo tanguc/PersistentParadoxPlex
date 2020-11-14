@@ -115,7 +115,7 @@ fn init_logging() -> anyhow::Result<()> {
     if let Ok(debug_level) = debug_level.into_string() {
         // let env_filter = Ok::<_, ()>(tracing_subscriber::EnvFilter::from_default_env());
         let env_filter = tracing_subscriber::EnvFilter::try_new(format!(
-            "persistent_marking_lb={},tonic=trace,tokio=trace",
+            "persistent_paradox_plex={},tonic=trace,tokio=trace",
             debug_level.clone()
         ));
         match env_filter {
@@ -132,7 +132,7 @@ fn init_logging() -> anyhow::Result<()> {
             Err(err) => {
                 eprintln!("Error: {:?}", err);
                 eprintln!("Failed to parse filters for tracing/logging");
-                eprintln!("persistent_marking_lb={}", debug_level.clone());
+                eprintln!("persistent_paradox_plex={}", debug_level.clone());
                 Ok(())
             }
         }

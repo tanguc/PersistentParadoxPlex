@@ -1,7 +1,7 @@
 [package]
 authors = ["tanguc <sergen.tanguc@gmail.com>"]
 edition = "2018"
-name = "persistent_marking_lb"
+name = "persistent_paradox_plex"
 version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

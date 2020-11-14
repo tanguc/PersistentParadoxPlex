@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "persistent_marking_lb/proto";
+option go_package = "persistent_paradox_plex/proto";
 
 package upstream.grpc.service;
 import "empty.proto";

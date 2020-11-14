@@ -1,6 +1,6 @@
-![Build and test](https://github.com/tanguc/PersistentMarkingLB/workflows/Build%20and%20test/badge.svg?branch=master)
+![Build and test](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20and%20test/badge.svg?branch=master)
 
-# persistent_marking_lb
+# persistent_paradox_plex
 Give us some long lived TCP stuffs, and we'll mark it for you !
 
 Sometimes when real apps with long lived connection like TCP needs to connect
@@ -69,7 +69,7 @@ simple solution. // NOTE the load balancer is aimed to be unique but still can b
  
  ## Architecture overview
  
- ![Architecture overview](./PersistentMarkingLB_architecture_overview.png)
+ ![Architecture overview](./PersistentParadoxPlex_architecture_overview.png)
  
 
 # **Development workflows**

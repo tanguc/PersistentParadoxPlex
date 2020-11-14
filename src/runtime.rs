@@ -23,8 +23,6 @@ use std::{
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch, Mutex};
 use uuid::Uuid;
 
-pub type PersistentMarkingLBRuntime = Arc<Mutex<Runtime>>;
-
 /// Channel to send/receive runtime orders
 pub type RuntimeOrderTxChannel = mpsc::Sender<RuntimeEvent>;
 pub type RuntimeOrderRxChannel = watch::Receiver<RuntimeEvent>;
@@ -353,7 +351,7 @@ impl Runtime {
 
     fn start(mut self, mut rx: mpsc::Receiver<RuntimeEvent>) {
         let runtime_task = async move {
-            debug!("Starting runtime of PersistentMarkingLB");
+            debug!("Starting runtime");
             let mut round_robin_context = round_robin::RoundRobinContext::new();
 
             loop {
