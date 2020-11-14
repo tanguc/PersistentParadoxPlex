@@ -12,6 +12,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Prepare Docker Meta Names
+        run: |
+          echo IMAGE_REPOSITORY=$(echo ${{ secrets.DOCKER_REPO }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
       - name: Tag version
         id: slug-version
         run: echo "::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}"
@@ -20,5 +23,5 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
-          tags: ${{ secrets.DOCKER_REPO }}:${{ steps.slug-version.outputs.VERSION }} , latest
+          tags: :${{ steps.slug-version.outputs.VERSION }} , latest
           push: true
