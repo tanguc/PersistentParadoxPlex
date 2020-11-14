@@ -12,10 +12,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Tag version
+        id: slug-version
+        run: echo ::set-output name=VERSION::${{ GITHUB_REF/refs\/tags\// }}
+        shell: bash
       - name: Build and push Docker images
         uses: docker/build-push-action@v1
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
-          repository: ${{ secrets.DOCKER_REPO }}
-          tags: ${{ github.ref }} , latest
+          tags: ${{ steps.slug-version.outputs.VERSION }} , latest
+          push: true
