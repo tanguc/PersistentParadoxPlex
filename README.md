@@ -1,5 +1,7 @@
 ![Build and test](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20and%20test/badge.svg?branch=master)
 
+![Build & Push to DockerHub](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20&%20Push%20to%20DockerHub/badge.svg?branch=0.0.1-beta.4&event=release)
+
 # PersistentParadoxPlex !
 
 A simple but powerful TCP load balancer demultiplexing to GRPC peers ! Free yourself from big monolithic apps which are required because of the stateful side of the TCP, we got it for you.
