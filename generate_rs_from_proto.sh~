@@ -1,3 +1,0 @@
-#!/bin/sh
-
-cd proto_gen && cargo build --release && ./target/debug/proto_gen && cp generated/upstream.grpc.service.rs ../generated/upstream.grpc.service.rs
