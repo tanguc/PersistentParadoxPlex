@@ -12,12 +12,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      - name: Tag version
-        id: slug-version
-        run: echo "::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}"
-      - name: Prepare repository Docker
-        run: |
-          echo IMAGE_REPOSITORY=toto >> $GITHUB_ENV
+      # - name: Tag version
+      #   id: slug-version
+      #   run: echo "::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}"
+      - name: Prepare repository images
+        id: docker-meta
+        uses: crazy-max/ghaction-docker-meta@v1
+        with:
+          images:
+            - ${{ secrets.DOCKER_REPO }}
+      # - name: Prepare repository Docker
+      #   run: |
+      #     echo IMAGE_REPOSITORY=toto >> $GITHUB_ENV
       - name: Build and push Docker images
         uses: docker/build-push-action@v1
         with:
@@ -25,7 +31,9 @@ jobs:
           password: ${{ secrets.DOCKER_TOKEN }}
           context: .
           file: ./Dockerfile
-          tags: |
-            ${{ secrets.DOCKER_REPO }}:${{ steps.slug-version.outputs.VERSION }}
-            ${{ secrets.DOCKER_REPO }}:latest
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
           push: true
+
+  # ${{ secrets.DOCKER_REPO }}:${{ steps.slug-version.outputs.VERSION }}
+  # ${{ secrets.DOCKER_REPO }}:latest

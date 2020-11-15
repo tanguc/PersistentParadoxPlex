@@ -1,6 +1,4 @@
-![Build and test](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20and%20test/badge.svg?branch=master)
-
-![Build & Push to DockerHub](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20&%20Push%20to%20DockerHub/badge.svg?branch=0.0.1-beta.4&event=release)
+![Build & test](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20and%20test/badge.svg?branch=master) ![DockerHub](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20&%20Push%20to%20DockerHub/badge.svg?branch=0.0.1-beta.4&event=release)
 
 ![logo](./logo.svg)
 
