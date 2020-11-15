@@ -2,9 +2,10 @@
 
 ![Build & Push to DockerHub](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20&%20Push%20to%20DockerHub/badge.svg?branch=0.0.1-beta.4&event=release)
 
-# PersistentParadoxPlex !
+![logo](./logo.svg)
 
-A simple but powerful TCP load balancer demultiplexing to GRPC peers ! Free yourself from big monolithic apps which are required because of the stateful side of the TCP, we got it for you.
+TCP load balancer for demultiplexing to GRPC peers !
+Get ride of your big monolithic application(s) where long lived TCP sockets can be a bottleneck, we got it for you.
 
 ---
 
@@ -62,6 +63,7 @@ PersistentParadoxPlex is aimed to bring more flexibility and empower these old b
 - Demultplexing of TCP sockets
 - Identification and handle of lifecycle for TCP sockets
 - Unique UUID generated TCP sockets
+- Highly generic Protobuf definition for almost all uses cases
 - gRPC for upstreams clients (eg. the Cloud/K8S)
 - Fair distribution of downstream peers (TCP sockets) via Round Robin like heuristics
 - Broadcast to all/active/inactive downstream peers
