@@ -1,10 +1,8 @@
 name: Build & Push to DockerHub
-
 on:
   release:
     types:
       - published
-
 jobs:
   push:
     name: Login & Push to DockerHub
@@ -15,24 +13,12 @@ jobs:
       - name: Tag version
         id: slug-version
         run: echo "::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}"
-      # - name: Prepare repository images
-      #   id: docker-meta
-      #   uses: crazy-max/ghaction-docker-meta@v1
-      #   with:
-      #     tag-match: v(.*)
-      # - name: Prepare repository Docker
-      #   run: |
-      #     echo IMAGE_REPOSITORY=toto >> $GITHUB_ENV
       - name: Build and push Docker images
         uses: docker/build-push-action@v1
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
           tags: ${{ steps.slug-version.outputs.VERSION }}, latest
-          # tags: ${{ steps.docker-meta.outputs.tags }}
           labels: ${{ steps.docker-meta.outputs.labels }}
           push: true
           repository: ${{ secrets.DOCKER_REPO }}
-
-  # ${{ secrets.DOCKER_REPO }}:${{ steps.slug-version.outputs.VERSION }}
-  # ${{ secrets.DOCKER_REPO }}:latest
