@@ -1,4 +1,4 @@
-[![GitHub release](https://img.shields.io/github/release/docker/build-push-action.svg?style=flat-square)](https://github.com/tanguc/PersistentParadoxPlex/releases/latest) ![Build & test](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20and%20test/badge.svg?branch=master) ![DockerHub](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20&%20Push%20to%20DockerHub/badge.svg?branch=0.0.1-beta.4&event=release)
+[![GitHub release](https://img.shields.io/github/v/release/tanguc/PersistentParadoxPlex?color=green)](https://github.com/tanguc/PersistentParadoxPlex/releases/latest) ![Build & test](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20and%20test/badge.svg?branch=master) ![DockerHub](https://github.com/tanguc/PersistentParadoxPlex/workflows/Build%20&%20Push%20to%20DockerHub/badge.svg?branch=0.0.1-beta.4&event=release)
 
 ![logo](./logo.svg)
 
