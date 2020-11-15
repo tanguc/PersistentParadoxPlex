@@ -52,7 +52,7 @@ PersistentParadoxPlex is aimed to bring more flexibility and empower these old b
 
 ## Architecture overview
 
-![Architecture overview](./architecture_overview.png)
+![Architecture overview](./architecture_overview.svg)
 
 ---
 
