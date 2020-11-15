@@ -19,8 +19,7 @@ jobs:
         id: docker-meta
         uses: crazy-max/ghaction-docker-meta@v1
         with:
-          images:
-            - ${{ secrets.DOCKER_REPO }}
+          images: ${{ secrets.DOCKER_REPO }}
       # - name: Prepare repository Docker
       #   run: |
       #     echo IMAGE_REPOSITORY=toto >> $GITHUB_ENV
