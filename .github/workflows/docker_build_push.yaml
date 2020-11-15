@@ -15,6 +15,9 @@ jobs:
       - name: Tag version
         id: slug-version
         run: echo "::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}"
+      - name: Prepare repository Docker
+        run: |
+          echo IMAGE_REPOSITORY=toto >> $GITHUB_ENV
       - name: Build and push Docker images
         uses: docker/build-push-action@v1
         with:
